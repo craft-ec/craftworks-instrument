@@ -46,6 +46,34 @@ pub const STREAM_VERSION: u16 = 1;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub struct OpId(pub u32);
 
+impl OpId {
+    /// A counter that belongs to no single operation — a connection-wide total,
+    /// a ring drop. A sentinel rather than an `Option` so the event stays
+    /// `Copy` and the same size whatever it carries.
+    pub const NONE: OpId = OpId(u32::MAX);
+}
+
+/// What happened to a labelled operation, as the RECORDING sees it.
+///
+/// Derived from labelled pairs, never from a count: the two failures that
+/// bought this (`harness#38`, `harness#39` run 1) were both a tool counting
+/// answers rather than matching them to what they named.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Answered {
+    /// Asked, and answered.
+    Once,
+    /// Asked, and nothing came back.
+    Never,
+    /// Answered AFTER its own operation had been closed for want of an answer.
+    /// Not a success: it says the pairing of everything after it is suspect.
+    Late,
+    /// Answered more times than it was asked. The count is what arrived.
+    Twice(usize),
+    /// An answer for something this recorder never asked. Reported on its own,
+    /// never attributed to whatever happened to be open.
+    Foreign,
+}
+
 /// One payload entry: a reviewed key and a number. That is the whole open part.
 ///
 /// No strings, no bytes, no generics. A site that wants to say something the
@@ -72,8 +100,13 @@ pub enum Event {
         op: OpId,
         outcome: Outcome,
     },
-    /// A number, from the reviewed vocabulary.
-    Counter { site: Site, entry: Entry },
+    /// A number, from the reviewed vocabulary, for one operation.
+    ///
+    /// `op` is [`OpId::NONE`] when the number belongs to no single operation.
+    /// It is here rather than in a fifth variant because bytes-per-operation
+    /// is the COST tier, and cost has always been `Counter`'s job — the spine
+    /// stays at four.
+    Counter { site: Site, op: OpId, entry: Entry },
     /// A request or a response carrying a LABELLED foreign id.
     ///
     /// The label, never the id — see [`label`].

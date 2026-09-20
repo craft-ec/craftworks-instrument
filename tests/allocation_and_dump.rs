@@ -88,6 +88,7 @@ fn a_dump_says_when_its_pairing_stopped_being_trustworthy() {
     let clean = Recorder::with_capacity(64);
     clean.event(Event::Counter {
         site: SITE,
+        op: instrument::OpId::NONE,
         entry: instrument::Entry {
             key: instrument::vocab::Key::Sent,
             value: 1,
@@ -108,6 +109,7 @@ fn a_dump_says_when_its_pairing_stopped_being_trustworthy() {
     ] {
         rec.event(Event::Counter {
             site: SITE,
+            op: instrument::OpId::NONE,
             entry: instrument::Entry { key, value },
         });
     }

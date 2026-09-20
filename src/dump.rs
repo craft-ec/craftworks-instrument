@@ -151,8 +151,21 @@ fn one(e: &Event) -> String {
         Event::Exit { site, op, outcome } => {
             format!("exit   {}#{} {outcome:?}", site.name(), op.0)
         }
-        Event::Counter { site, entry } => {
-            format!("count  {} {:?}={}", site.name(), entry.key, entry.value)
+        Event::Counter { site, op, entry } => {
+            // The operation is shown only when the counter belongs to one; a
+            // connection-wide total printing `#4294967295` would be noise that
+            // a reader has to learn to ignore.
+            if *op == crate::OpId::NONE {
+                format!("count  {} {:?}={}", site.name(), entry.key, entry.value)
+            } else {
+                format!(
+                    "count  {}#{} {:?}={}",
+                    site.name(),
+                    op.0,
+                    entry.key,
+                    entry.value
+                )
+            }
         }
         Event::Edge { site, dir, id } => format!("edge   {} {dir:?} {id}", site.name()),
     }
