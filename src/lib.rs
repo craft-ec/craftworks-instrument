@@ -25,10 +25,12 @@
 //!   the probes ship in production as the support tool.
 
 pub mod dump;
+pub mod gap;
 pub mod label;
 pub mod recorder;
 pub mod vocab;
 
+pub use gap::{Actual, Expected, Gap};
 pub use label::{Kind, Label, Labels};
 pub use recorder::{Record, Recorder, Recording, SyncRecorder, SyncRecording};
 pub use vocab::{Bucket, Dir, Key, Outcome, Site, SizeClass};

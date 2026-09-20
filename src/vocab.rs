@@ -38,6 +38,37 @@ impl Site {
 }
 
 /// What a payload entry is ABOUT. Closed, and every addition is reviewed.
+///
+/// # The test every key must pass
+///
+/// **Observability is DERIVED where the fact is a property of the DATA, and
+/// INSTRUMENTED only where it is a property of an EXECUTION.**
+///
+/// Derived — never a key here:
+/// - how much a tree stores: already in every node's aggregate (ARCHITECTURE §5);
+/// - which blocks a write rewrote: a `diff` of two roots, read only where they
+///   differ;
+/// - what an operation SHOULD cost: a pure function of the tree's shape, since
+///   node boundaries are deterministic.
+///
+/// Instrumented — what these keys are for:
+/// - time, and anything measured against a clock the data does not have;
+/// - bytes ACTUALLY transferred, which is not what the data says they should be;
+/// - hops, attempts, retries;
+/// - where an operation died, and **what did not happen at all**.
+///
+/// A key that reports a derivable fact is DELETED, not maintained: it is a
+/// second account of something the data already answers, and two accounts of
+/// one fact disagree. Three were removed by that test —
+/// [`Record::outstanding`](crate::Record::outstanding) already derives
+/// outstanding work from the edges, [`Record::dropped`](crate::Record::dropped)
+/// already reads the ring's own counter, and a tree's depth is a property of
+/// its root.
+///
+/// The test has a cost when it is not applied. A 1 KiB block was measured
+/// costing 240-395 KB to fetch (F46) and it took six rejected instruments and a
+/// night to establish, because nothing said what it SHOULD have cost. Against a
+/// derived expectation the same run reads as a ratio on the first attempt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum Key {
@@ -51,12 +82,6 @@ pub enum Key {
     Sent,
     /// Responses received.
     Received,
-    /// Sent minus received: the number four voided harness runs could not see.
-    Outstanding,
-    /// Events the recorder dropped because its ring was full.
-    Dropped,
-    /// Depth in a tree walk.
-    Depth,
     /// A bucketed count derived from user data — see [`Bucket`].
     CountBucket,
     /// A coarsened offset from the start of the recording, in milliseconds.
