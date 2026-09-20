@@ -114,7 +114,6 @@ pub fn render<R: Record + ?Sized>(rec: &R, what: &'static str, last: usize) -> S
         Key::Misses,
         Key::Sent,
         Key::Received,
-        Key::Outstanding,
         Key::Attempts,
         Key::Owed,
         Key::Ambiguous,

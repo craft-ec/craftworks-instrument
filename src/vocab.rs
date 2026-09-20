@@ -17,6 +17,23 @@
 //!   length of a ciphertext is a property of the plaintext.
 //! - **Counts derived from user data** are BUCKETED, and times are COARSENED
 //!   offsets from the start of the recording.
+//!
+//! **The bar RISES rather than falls.** ARCHITECTURE §5 now sends execution
+//! facts to an adjacent REPLICATED tree, so "never leaves the device unasked"
+//! becomes "published by construction" — a recording that was merely private
+//! before is shared by default, and every guarantee above has to hold against
+//! that.
+//!
+//! The guard is the `&'static str` lifetime, which a runtime value cannot have:
+//!
+//! ```compile_fail
+//! # use instrument::vocab::Site;
+//! let from_user: String = std::env::args().next().unwrap();
+//! let site = Site::of(&from_user); // does not live long enough
+//! ```
+//!
+//! `Box::leak` would defeat it. That is the honest limit: the lifetime stops
+//! the accident, not someone determined to leak.
 
 /// Where an event happened.
 ///
@@ -38,6 +55,62 @@ impl Site {
 }
 
 /// What a payload entry is ABOUT. Closed, and every addition is reviewed.
+///
+/// # The test every key must pass
+///
+/// **Observability is DERIVED where the fact is a property of the DATA, and
+/// INSTRUMENTED only where it is a property of an EXECUTION.**
+///
+/// Derived — never a key here:
+/// - how much a tree stores: already in every node's aggregate (ARCHITECTURE §5);
+/// - which blocks a write rewrote: a `diff` of two roots, read only where they
+///   differ;
+/// - what an operation SHOULD cost: a pure function of the tree's shape, since
+///   node boundaries are deterministic.
+///
+/// Instrumented — what these keys are for:
+/// - time, and anything measured against a clock the data does not have;
+/// - bytes ACTUALLY transferred, which is not what the data says they should be;
+/// - hops, attempts, retries;
+/// - where an operation died, and **what did not happen at all**.
+///
+/// # The third class: WOULD-PAY-OR-STEER
+///
+/// The sort is three ways, not two. Anything that can **pay or steer a
+/// choice** — quota, keeper selection, reputation — is not a self-observation
+/// at all, and may never be emitted as one.
+///
+/// ARCHITECTURE §5 settles why: *"if node behaviour steers keeper selection,
+/// 'B says A answered in T' counts and 'A says A is fast' does not — the
+/// subject never attests to itself."* Such a fact is a **receipt the
+/// COUNTERPARTY signs into its own tree**, double-entry, and a balance moves
+/// only where both halves agree (§14). A self-reported number cannot be any of
+/// that: it has one author, who profits from it.
+///
+/// So this crate's keys are for **diagnosis only**. §5 again: *"Observations
+/// that only DIAGNOSE need no receipt, because nobody profits from a wrong
+/// latency figure that steers nothing; the two classes are separated from the
+/// first event, not later."*
+///
+/// [`PayOrSteer`] holds the list, and it is EMPTY. It is not empty because
+/// nobody thought of one — it is empty because a key that belongs there does
+/// not belong in this crate. The list exists so that the first quota counter
+/// has somewhere to be declared, and declaring it fails a test with the
+/// reason, rather than looking like an ordinary event and quietly becoming
+/// one.
+///
+/// A key that reports a derivable fact is DELETED, not maintained: it is a
+/// second account of something the data already answers, and two accounts of
+/// one fact disagree. Three were removed by that test —
+/// [`Record::outstanding`](crate::Record::outstanding) already derives
+/// outstanding work from the edges, [`Record::dropped`](crate::Record::dropped)
+/// already reads the ring's own counter, and a tree's depth is a property of
+/// its root.
+///
+/// The test has a cost when it is not applied. A 1 KiB block was measured
+/// costing 240-395 KB to fetch (F46) and it took six rejected instruments and a
+/// night to establish, because nothing said what it SHOULD have cost. Against a
+/// derived expectation the same run reads as a ratio on the first attempt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum Key {
@@ -51,12 +124,6 @@ pub enum Key {
     Sent,
     /// Responses received.
     Received,
-    /// Sent minus received: the number four voided harness runs could not see.
-    Outstanding,
-    /// Events the recorder dropped because its ring was full.
-    Dropped,
-    /// Depth in a tree walk.
-    Depth,
     /// A bucketed count derived from user data — see [`Bucket`].
     CountBucket,
     /// A coarsened offset from the start of the recording, in milliseconds.
@@ -126,6 +193,115 @@ pub enum Key {
     /// no longer trustworthy, which is exactly what the healthy-looking line
     /// over a shifted stream failed to say.
     Ambiguous,
+
+    /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
+    ///
+    /// Every real key in this crate is [`Class::Diagnostic`], which leaves the
+    /// classifier indistinguishable from a function that returns that constant
+    /// — so a later edit flattening it would pass every test. This is the
+    /// sample that makes the sort OBSERVABLE: a key that must come back
+    /// [`Class::PayOrSteer`], so a constant classifier fails.
+    #[cfg(test)]
+    SampleQuotaSpent,
+
+    /// NOT A REAL KEY. The same control for [`Class::Derivable`].
+    #[cfg(test)]
+    SampleDepth,
+}
+
+/// Keys that would PAY or STEER, and therefore may never be self-observed.
+///
+/// Empty, and that is the point. A fact that can pay or steer a choice is a
+/// receipt the counterparty signs into its own tree (ARCHITECTURE §5, §14) —
+/// double-entry, where a balance moves only where both halves agree. A
+/// self-reported number has one author, who profits from it.
+///
+/// If a key ever belongs here, it does not belong in this crate: it belongs in
+/// the record the counterparty writes. The list exists so that the attempt is
+/// DECLARED rather than silently made, and so the test below can say why.
+pub const PAY_OR_STEER: &[Key] = &[];
+
+/// Every key, for tests that must visit all of them.
+///
+/// The list can drift from the enum, so it is NOT the guard: [`class`] is,
+/// because its match is exhaustive and a new key fails to compile until it is
+/// sorted. This exists so the audit tests can iterate.
+pub const ALL: &[Key] = &[
+    Key::Reads,
+    Key::Misses,
+    Key::BytesClass,
+    Key::Sent,
+    Key::Received,
+    Key::CountBucket,
+    Key::OffsetMs,
+    Key::Attempts,
+    Key::Owed,
+    Key::Effects,
+    Key::Ops,
+    Key::Awaiting,
+    Key::ReadBack,
+    Key::Stranded,
+    Key::DroppedMsgs,
+    Key::BytesOut,
+    Key::BytesIn,
+    Key::Ambiguous,
+];
+
+/// Which of the three audit classes a [`Key`] falls in.
+///
+/// The audit sorts three ways, not two, and [`class`] performs the sort as an
+/// exhaustive match — so a key cannot be added without someone deciding which
+/// class it is in. That is the whole mechanism: the first quota counter is
+/// stopped at compile time by a missing match arm, instead of looking like an
+/// ordinary event and quietly becoming one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    /// A property of the DATA, computable without running anything.
+    ///
+    /// Never a key: it is DELETED, because a stored copy of a derivable fact
+    /// is a second answer that can disagree with the first.
+    Derivable,
+    /// A property of THIS EXECUTION, and nothing else reads it.
+    ///
+    /// The only class this crate carries. Nobody profits from a wrong latency
+    /// figure that steers nothing (ARCHITECTURE §5), so it needs no receipt.
+    Diagnostic,
+    /// A fact that could PAY or STEER a choice.
+    ///
+    /// Never a key, and never a self-observation: see [`PAY_OR_STEER`].
+    PayOrSteer,
+}
+
+/// Sort a key into its audit class.
+///
+/// Exhaustive on purpose — no wildcard arm. Adding a [`Key`] without sorting
+/// it is a compile error, which is the point.
+pub const fn class(k: Key) -> Class {
+    match k {
+        // The negative controls; see their docs on [`Key`].
+        #[cfg(test)]
+        Key::SampleQuotaSpent => Class::PayOrSteer,
+        #[cfg(test)]
+        Key::SampleDepth => Class::Derivable,
+        Key::Reads => Class::Diagnostic,
+        Key::Misses => Class::Diagnostic,
+        Key::BytesClass => Class::Diagnostic,
+        Key::Sent => Class::Diagnostic,
+        Key::Received => Class::Diagnostic,
+        Key::CountBucket => Class::Diagnostic,
+        Key::OffsetMs => Class::Diagnostic,
+        Key::Attempts => Class::Diagnostic,
+        Key::Owed => Class::Diagnostic,
+        Key::Effects => Class::Diagnostic,
+        Key::Ops => Class::Diagnostic,
+        Key::Awaiting => Class::Diagnostic,
+        Key::ReadBack => Class::Diagnostic,
+        Key::Stranded => Class::Diagnostic,
+        Key::DroppedMsgs => Class::Diagnostic,
+        Key::BytesOut => Class::Diagnostic,
+        Key::BytesIn => Class::Diagnostic,
+        Key::Ambiguous => Class::Diagnostic,
+    }
 }
 
 /// Why an inbound message was discarded.
@@ -255,5 +431,135 @@ pub const fn coarsen_ms(ms: u64) -> u64 {
         (ms / 100) * 100
     } else {
         (ms / 1_000) * 1_000
+    }
+}
+
+#[cfg(test)]
+mod audit {
+    use super::*;
+
+    /// What class each key is in, stated ONE BY ONE.
+    ///
+    /// A test that only asserts "no key is in the forbidden class" is passed by
+    /// a classifier that returns a constant, and by an edit that later flattens
+    /// one. This table says what the answer IS, so a wrong answer is a failing
+    /// test rather than a silent reclassification.
+    ///
+    /// **Every real key is `Diagnostic` today, and that is a fact about this
+    /// crate rather than a shortcut.** A key here reports a property of one
+    /// EXECUTION, nothing else reads it, and nobody profits from a wrong
+    /// latency figure that steers nothing (ARCHITECTURE §5) — so none of them
+    /// needs a receipt. The day one of them is not diagnostic, this table
+    /// changes deliberately, in the same commit as the key.
+    const SORTED: &[(Key, Class)] = &[
+        (Key::Reads, Class::Diagnostic),
+        (Key::Misses, Class::Diagnostic),
+        (Key::BytesClass, Class::Diagnostic),
+        (Key::Sent, Class::Diagnostic),
+        (Key::Received, Class::Diagnostic),
+        (Key::CountBucket, Class::Diagnostic),
+        (Key::OffsetMs, Class::Diagnostic),
+        (Key::Attempts, Class::Diagnostic),
+        (Key::Owed, Class::Diagnostic),
+        (Key::Effects, Class::Diagnostic),
+        (Key::Ops, Class::Diagnostic),
+        (Key::Awaiting, Class::Diagnostic),
+        (Key::ReadBack, Class::Diagnostic),
+        (Key::Stranded, Class::Diagnostic),
+        (Key::DroppedMsgs, Class::Diagnostic),
+        (Key::BytesOut, Class::Diagnostic),
+        (Key::BytesIn, Class::Diagnostic),
+        (Key::Ambiguous, Class::Diagnostic),
+    ];
+
+    /// THE CONTROL: the classifier can tell the three classes apart.
+    ///
+    /// Without this, every other test in this module passes against
+    /// `fn class(_) -> Class { Class::Diagnostic }`, because every real key is
+    /// diagnostic. The samples are `cfg(test)` keys that cannot ship and are
+    /// never emitted; they exist so the sort is OBSERVABLE.
+    #[test]
+    fn the_classifier_tells_the_three_classes_apart() {
+        assert_eq!(class(Key::SampleQuotaSpent), Class::PayOrSteer);
+        assert_eq!(class(Key::SampleDepth), Class::Derivable);
+        assert_eq!(class(Key::Reads), Class::Diagnostic);
+
+        // Three distinct answers from the real function. A classifier that
+        // returned a constant would fail here first, and every other test in
+        // this module would still pass — which is why this one exists.
+        let (pay, derivable, diagnostic) = (
+            class(Key::SampleQuotaSpent),
+            class(Key::SampleDepth),
+            class(Key::Reads),
+        );
+        assert!(
+            pay != derivable && derivable != diagnostic && pay != diagnostic,
+            "the classifier gave fewer than three distinct answers \
+             ({pay:?}, {derivable:?}, {diagnostic:?}), so it is \
+             indistinguishable from a constant and proves nothing about any key"
+        );
+    }
+
+    /// Every key's class, one by one.
+    #[test]
+    fn each_key_is_in_the_class_the_table_states() {
+        assert_eq!(
+            SORTED.len(),
+            ALL.len(),
+            "a key was added without being stated in SORTED"
+        );
+        for (k, want) in SORTED {
+            assert_eq!(
+                class(*k),
+                *want,
+                "{k:?} is not in the class the audit states it is in"
+            );
+        }
+        for k in ALL {
+            assert!(
+                SORTED.iter().any(|(s, _)| s == k),
+                "{k:?} is emitted but the audit never states its class"
+            );
+        }
+    }
+
+    /// No key may be in the PAY-OR-STEER class.
+    ///
+    /// ARCHITECTURE §5: "the subject never attests to itself". A fact that can
+    /// pay or steer a choice is a receipt the COUNTERPARTY signs into its own
+    /// tree — double-entry, where a balance moves only where both halves
+    /// agree (§14). This crate emits self-observations, so a key here would be
+    /// the half that is worth nothing alone, published as if it were the whole
+    /// record. It does not belong in this crate at all; it belongs in the
+    /// record the counterparty writes.
+    #[test]
+    fn nothing_that_could_pay_or_steer_is_self_observed() {
+        assert!(
+            PAY_OR_STEER.is_empty(),
+            "a key that can pay or steer is not a self-observation: it is a \
+             receipt the counterparty signs into its own tree (ARCHITECTURE \
+             §5, §14). Move it there — do not emit it from here."
+        );
+        for k in ALL {
+            assert_ne!(
+                class(*k),
+                Class::PayOrSteer,
+                "{k:?} was sorted PayOrSteer but is still emitted as a \
+                 self-observation"
+            );
+        }
+    }
+
+    /// No key reports a derivable fact.
+    #[test]
+    fn nothing_derivable_is_stored() {
+        for k in ALL {
+            assert_ne!(
+                class(*k),
+                Class::Derivable,
+                "{k:?} is derivable, so it is a second answer that can \
+                 disagree with the first — delete it, do not maintain it"
+            );
+        }
     }
 }
