@@ -72,3 +72,52 @@ fn the_guard_is_silent_when_nothing_fails() {
     let rec = Recorder::with_capacity(4);
     let _g = DumpOnPanic::new(&rec, "quiet");
 }
+
+/// A recording whose pairing went wrong must SAY so in its dump.
+///
+/// `Owed` and `Ambiguous` exist for one failure: a bounded wait expired, the
+/// node still owed that answer, it arrived later, and a transport pairing by
+/// position handed it to a different operation — which printed a healthy line
+/// over a stream that was shifted by one (freenet-harness#38).
+///
+/// The control is the point. A dump that prints these keys whether or not they
+/// were recorded would pass this test while saying nothing, so a clean
+/// recording is rendered too and must NOT mention either word.
+#[test]
+fn a_dump_says_when_its_pairing_stopped_being_trustworthy() {
+    let clean = Recorder::with_capacity(64);
+    clean.event(Event::Counter {
+        site: SITE,
+        entry: instrument::Entry {
+            key: instrument::vocab::Key::Sent,
+            value: 1,
+        },
+    });
+    let clean = instrument::dump::render(&clean.recording(), "a clean run", 20);
+    assert!(
+        !clean.contains("Owed") && !clean.contains("Ambiguous"),
+        "a recording that never lost its footing must not mention either key:\n{clean}"
+    );
+
+    let rec = Recorder::with_capacity(64);
+    for (key, value) in [
+        (instrument::vocab::Key::Sent, 2),
+        (instrument::vocab::Key::Received, 1),
+        (instrument::vocab::Key::Owed, 1),
+        (instrument::vocab::Key::Ambiguous, 1),
+    ] {
+        rec.event(Event::Counter {
+            site: SITE,
+            entry: instrument::Entry { key, value },
+        });
+    }
+    let shifted = instrument::dump::render(&rec.recording(), "a shifted run", 20);
+    assert!(
+        shifted.contains("Owed: 1"),
+        "the dump must report what is still owed:\n{shifted}"
+    );
+    assert!(
+        shifted.contains("Ambiguous: 1"),
+        "and that an answer arrived while pairing was untrustworthy:\n{shifted}"
+    );
+}

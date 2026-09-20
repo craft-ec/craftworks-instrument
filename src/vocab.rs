@@ -63,6 +63,28 @@ pub enum Key {
     OffsetMs,
     /// Retries, re-puts, re-sends.
     Attempts,
+    /// Answers a caller gave up waiting for and is still OWED.
+    ///
+    /// A bounded wait that expires does not cancel anything: the node still
+    /// owes that answer, and it arrives later on a connection that carries no
+    /// correlation id. Until something can say WHICH request an answer
+    /// settles, a transport that pairs by position is shifted by one from the
+    /// moment this is non-zero — which is the defect that made a node look
+    /// like it had refused fifteen puts it had in fact accepted
+    /// (freenet-harness#38).
+    ///
+    /// It does not go down. Nothing can prove which later answer settled an
+    /// owed one, so a decrement would be a guess written as a fact; this
+    /// counts how many times pairing-by-position lost its footing.
+    Owed,
+    /// Answers received while [`Owed`](Key::Owed) was non-zero.
+    ///
+    /// Counted, and deliberately NOT attributed to any operation: an answer
+    /// that might belong to an abandoned request must not close a running one.
+    /// A reader seeing this above zero knows the pairing in that recording is
+    /// no longer trustworthy, which is exactly what the healthy-looking line
+    /// over a shifted stream failed to say.
+    Ambiguous,
 }
 
 /// How an operation ended.
