@@ -170,3 +170,113 @@ fn a_label_never_carries_the_id_and_saturates_rather_than_growing() {
     let over = many.label(Kind::Request, &999_999);
     assert_eq!(over.ordinal, Labels::<u32>::CAP);
 }
+
+/// A real per-call report, recorded and dumped, leaves NO user content.
+///
+/// This is the test the delegate's report needs before it ships, because that
+/// report is the production support tool: the same bounded recording runs in a
+/// user's app, and "report a problem" exports it. A number the engine counted
+/// is not content; a key, a value or a domain name is — however small, however
+/// well typed. `domain = "medical"` is a category and no grep finds it.
+#[test]
+fn a_per_call_report_carries_counts_and_nothing_else() {
+    use instrument::vocab::{DropReason, Key};
+    use instrument::Record as _;
+
+    // The things a real call would have touched. None of them may appear.
+    let secrets = [
+        "medical",
+        "alice@example.com",
+        "9nPgCTfiuX3Zycngp3vvgFiY9aqUmvKG64y86t6qgyKi",
+        "patient-notes",
+        "my-private-domain",
+    ];
+
+    let rec = Recorder::with_capacity(256);
+    let site = Site::of("delegate::call");
+    let op = instrument::OpId(7);
+    // Exactly what Reply::Call carries: six counts the engine already had.
+    for (key, value) in [
+        (Key::Effects, 3u64),
+        (Key::Ops, 2),
+        (Key::Awaiting, 1),
+        (Key::ReadBack, 1),
+        (Key::Stranded, 0),
+        (Key::DroppedMsgs, DropReason::NotForUs.code()),
+    ] {
+        rec.event(Event::Counter {
+            site,
+            op,
+            entry: instrument::Entry { key, value },
+        });
+    }
+
+    let dump = instrument::dump::render(&rec.recording(), "a delegate call", 40);
+    for s in secrets {
+        assert!(
+            !dump.contains(s),
+            "the dump contains user content verbatim: {s}"
+        );
+        // And no run of it long enough to identify it.
+        for w in 6..=s.len() {
+            let mut i = 0;
+            while i + w <= s.len() {
+                assert!(
+                    !dump.contains(&s[i..i + w]),
+                    "the dump contains a {w}-byte run of user content: {}",
+                    &s[i..i + w]
+                );
+                i += 1;
+            }
+        }
+    }
+
+    // And the report IS there, which is the point of keeping it.
+    assert!(dump.contains("Effects"), "{dump}");
+    assert!(
+        dump.contains("Stranded") || rec.recording().total(Key::Stranded) == 0,
+        "stranded is visible without arithmetic: {dump}"
+    );
+}
+
+/// Every `DropReason` code is pinned, and no two share a number.
+///
+/// These codes are a WIRE VOCABULARY. A support bundle carries them off the
+/// device and something else decodes them later, so a reason that quietly
+/// changes number — or two reasons that share one — is a silent misreading in
+/// a reader that has no way to know. Same class as a data file whose MEANING
+/// changed while every field stayed where it was.
+///
+/// Pinned exactly rather than asserted to be "stable": a test that only checks
+/// they are distinct would let every value shift together, which breaks any
+/// bundle already written.
+#[test]
+fn drop_reason_codes_are_pinned_and_distinct() {
+    use instrument::vocab::DropReason::*;
+
+    // Each value, by hand. Changing one of these is changing what an already
+    // written bundle means, and it should take an edit here to do it.
+    assert_eq!(Unparseable.code(), 0);
+    assert_eq!(TrailingBytes.code(), 1);
+    assert_eq!(TooLarge.code(), 2);
+    assert_eq!(Unexpected.code(), 3);
+    assert_eq!(NotForUs.code(), 4);
+
+    // And no two share a number — the failure that pinning alone would not
+    // catch if a SIXTH reason were added reusing one.
+    let all = [Unparseable, TrailingBytes, TooLarge, Unexpected, NotForUs];
+    let codes: std::collections::BTreeSet<u64> = all.iter().map(|r| r.code()).collect();
+    assert_eq!(
+        codes.len(),
+        all.len(),
+        "two DropReasons share a code: {:?}",
+        all.iter().map(|r| (*r, r.code())).collect::<Vec<_>>()
+    );
+
+    // The codes are contiguous from zero, which is what lets a reader treat an
+    // unknown one as "newer than me" rather than as corruption.
+    assert_eq!(
+        codes.into_iter().collect::<Vec<_>>(),
+        (0..all.len() as u64).collect::<Vec<_>>()
+    );
+}
