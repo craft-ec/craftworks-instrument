@@ -12,7 +12,7 @@
 //! OUTSTANDING says that.
 
 use crate::{
-    recorder::{Recorder, Recording},
+    recorder::{Record, Recorder},
     vocab::Key,
     Event, STREAM_VERSION,
 };
@@ -65,7 +65,7 @@ impl Drop for DumpOnPanic<'_> {
 /// Order matters: the counts that distinguish a wedge from work come FIRST,
 /// because a reader who sees `outstanding: 1,847` has the answer before
 /// reading a single event.
-pub fn render(rec: &Recording<'_>, what: &'static str, last: usize) -> String {
+pub fn render<R: Record + ?Sized>(rec: &R, what: &'static str, last: usize) -> String {
     use core::fmt::Write as _;
     let mut s = String::with_capacity(1024);
     let events = rec.events();

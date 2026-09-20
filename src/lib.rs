@@ -30,7 +30,7 @@ pub mod recorder;
 pub mod vocab;
 
 pub use label::{Kind, Label, Labels};
-pub use recorder::{Recorder, Recording};
+pub use recorder::{Record, Recorder, Recording, SyncRecorder, SyncRecording};
 pub use vocab::{Bucket, Dir, Key, Outcome, Site, SizeClass};
 
 /// The stream's version. ONE integer, at the stream level.

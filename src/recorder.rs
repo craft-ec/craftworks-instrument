@@ -37,15 +37,8 @@ struct Ring {
 impl Recorder {
     /// A ring of `capacity` events, allocated once, here and nowhere else.
     pub fn with_capacity(capacity: usize) -> Recorder {
-        let cap = capacity.max(1);
         Recorder {
-            inner: RefCell::new(Ring {
-                slots: Vec::with_capacity(cap),
-                at: 0,
-                seq: 0,
-                dropped: 0,
-                full: false,
-            }),
+            inner: RefCell::new(Ring::new(capacity)),
         }
     }
 
@@ -69,58 +62,27 @@ impl Probe for Recorder {
         let Ok(mut ring) = self.inner.try_borrow_mut() else {
             return;
         };
-        ring.seq += 1;
-        let cap = ring.slots.capacity();
-        if ring.slots.len() < cap {
-            ring.slots.push(e);
-            ring.at = ring.slots.len() % cap;
-            return;
-        }
-        // Full. Overwrite the oldest — a ring keeps the LAST N, which is what a
-        // failure dump needs — and count it. Never grow: an unbounded buffer in
-        // a long run is a leak with a nice name.
-        ring.full = true;
-        ring.dropped += 1;
-        let at = ring.at;
-        ring.slots[at] = e;
-        ring.at = (at + 1) % cap;
+        ring.push(e);
     }
 }
 
-/// The read side. A test holds this; instrumented code never does.
-pub struct Recording<'a> {
-    r: &'a Recorder,
-}
-
-impl Recording<'_> {
-    /// Events in the order they were offered, oldest first.
-    pub fn events(&self) -> Vec<Event> {
-        let ring = self.r.inner.borrow();
-        if !ring.full {
-            return ring.slots.clone();
-        }
-        let mut out = Vec::with_capacity(ring.slots.len());
-        out.extend_from_slice(&ring.slots[ring.at..]);
-        out.extend_from_slice(&ring.slots[..ring.at]);
-        out
-    }
-
-    /// How many events were offered in total, kept or not.
-    pub fn offered(&self) -> u64 {
-        self.r.inner.borrow().seq
-    }
-
-    /// How many the ring had to drop.
-    pub fn dropped(&self) -> u64 {
-        self.r.inner.borrow().dropped
-    }
+/// What a reader can ask of a recording.
+///
+/// A trait so the same tests run against both recorders. Two implementations
+/// of "what is outstanding" would drift, and the drift would be invisible
+/// until a dump from one of them was wrong — which is the failure this crate
+/// exists to prevent, arriving through its own back door.
+pub trait Record {
+    fn events(&self) -> Vec<Event>;
+    fn offered(&self) -> u64;
+    fn dropped(&self) -> u64;
 
     /// Requests with no matching response, by label.
     ///
     /// The number four voided harness runs could not see. It is a SUBTRACTION
     /// because `Edge` pairs the two directions by id — if the two were
     /// unrelated event types, this would be a heuristic.
-    pub fn outstanding(&self) -> Vec<Label> {
+    fn outstanding(&self) -> Vec<Label> {
         let mut open: Vec<Label> = Vec::new();
         for e in self.events() {
             if let Event::Edge { dir, id, .. } = e {
@@ -138,7 +100,7 @@ impl Recording<'_> {
     }
 
     /// Spans that were entered and never exited.
-    pub fn unfinished(&self) -> Vec<(Site, OpId)> {
+    fn unfinished(&self) -> Vec<(Site, OpId)> {
         let mut open: Vec<(Site, OpId)> = Vec::new();
         for e in self.events() {
             match e {
@@ -155,7 +117,7 @@ impl Recording<'_> {
     }
 
     /// The sum of one counter across the recording.
-    pub fn total(&self, key: Key) -> u64 {
+    fn total(&self, key: Key) -> u64 {
         self.events()
             .iter()
             .filter_map(|e| match e {
@@ -169,7 +131,7 @@ impl Recording<'_> {
     }
 
     /// How many spans ended each way.
-    pub fn outcomes(&self) -> Vec<(Outcome, usize)> {
+    fn outcomes(&self) -> Vec<(Outcome, usize)> {
         let mut out: Vec<(Outcome, usize)> = Vec::new();
         for e in self.events() {
             if let Event::Exit { outcome, .. } = e {
@@ -180,5 +142,132 @@ impl Recording<'_> {
             }
         }
         out
+    }
+}
+
+impl Ring {
+    /// Offer one event. The whole ring policy, in one place, used by both
+    /// recorders: keep the LAST N, count what that costs, never grow.
+    fn push(&mut self, e: Event) {
+        self.seq += 1;
+        let cap = self.slots.capacity();
+        if self.slots.len() < cap {
+            self.slots.push(e);
+            self.at = self.slots.len() % cap;
+            return;
+        }
+        self.full = true;
+        self.dropped += 1;
+        let at = self.at;
+        self.slots[at] = e;
+        self.at = (at + 1) % cap;
+    }
+
+    fn snapshot(&self) -> Vec<Event> {
+        if !self.full {
+            return self.slots.clone();
+        }
+        let mut out = Vec::with_capacity(self.slots.len());
+        out.extend_from_slice(&self.slots[self.at..]);
+        out.extend_from_slice(&self.slots[..self.at]);
+        out
+    }
+
+    fn new(capacity: usize) -> Ring {
+        let cap = capacity.max(1);
+        Ring {
+            slots: Vec::with_capacity(cap),
+            at: 0,
+            seq: 0,
+            dropped: 0,
+            full: false,
+        }
+    }
+}
+
+/// The read side. A test holds this; instrumented code never does.
+pub struct Recording<'a> {
+    r: &'a Recorder,
+}
+
+impl Record for Recording<'_> {
+    fn events(&self) -> Vec<Event> {
+        self.r.inner.borrow().snapshot()
+    }
+
+    fn offered(&self) -> u64 {
+        self.r.inner.borrow().seq
+    }
+
+    fn dropped(&self) -> u64 {
+        self.r.inner.borrow().dropped
+    }
+}
+
+/// The same ring, usable from several threads.
+///
+/// The harness is multi-threaded and so is the engine; a `RefCell` recorder
+/// cannot be shared across them. Everything else is identical on purpose —
+/// one ring policy, one set of read methods, and the SAME tests run against
+/// both, because two implementations of "what is outstanding" would drift and
+/// the drift would only show as a wrong dump.
+pub struct SyncRecorder {
+    inner: std::sync::Mutex<Ring>,
+}
+
+impl SyncRecorder {
+    pub fn with_capacity(capacity: usize) -> SyncRecorder {
+        SyncRecorder {
+            inner: std::sync::Mutex::new(Ring::new(capacity)),
+        }
+    }
+
+    pub fn recording(&self) -> SyncRecording<'_> {
+        SyncRecording { r: self }
+    }
+
+    /// The lock, with a poisoned one RECOVERED rather than unwrapped.
+    ///
+    /// A probe must never panic — a probe that fails a passing test is the
+    /// worst kind of behaviour change — and `lock().unwrap()` panics for every
+    /// caller forever once any thread has panicked while holding it. A ring of
+    /// `Copy` events has no invariant a panic could have broken, so recovering
+    /// is sound here in a way it would not be for an arbitrary structure.
+    fn ring(&self) -> std::sync::MutexGuard<'_, Ring> {
+        match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+impl Default for SyncRecorder {
+    fn default() -> Self {
+        SyncRecorder::with_capacity(4096)
+    }
+}
+
+impl Probe for SyncRecorder {
+    fn event(&self, e: Event) {
+        self.ring().push(e);
+    }
+}
+
+/// The read side of a [`SyncRecorder`].
+pub struct SyncRecording<'a> {
+    r: &'a SyncRecorder,
+}
+
+impl Record for SyncRecording<'_> {
+    fn events(&self) -> Vec<Event> {
+        self.r.ring().snapshot()
+    }
+
+    fn offered(&self) -> u64 {
+        self.r.ring().seq
+    }
+
+    fn dropped(&self) -> u64 {
+        self.r.ring().dropped
     }
 }
