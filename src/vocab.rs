@@ -193,6 +193,20 @@ pub enum Key {
     /// no longer trustworthy, which is exactly what the healthy-looking line
     /// over a shifted stream failed to say.
     Ambiguous,
+
+    /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
+    ///
+    /// Every real key in this crate is [`Class::Diagnostic`], which leaves the
+    /// classifier indistinguishable from a function that returns that constant
+    /// — so a later edit flattening it would pass every test. This is the
+    /// sample that makes the sort OBSERVABLE: a key that must come back
+    /// [`Class::PayOrSteer`], so a constant classifier fails.
+    #[cfg(test)]
+    SampleQuotaSpent,
+
+    /// NOT A REAL KEY. The same control for [`Class::Derivable`].
+    #[cfg(test)]
+    SampleDepth,
 }
 
 /// Keys that would PAY or STEER, and therefore may never be self-observed.
@@ -264,6 +278,11 @@ pub enum Class {
 /// it is a compile error, which is the point.
 pub const fn class(k: Key) -> Class {
     match k {
+        // The negative controls; see their docs on [`Key`].
+        #[cfg(test)]
+        Key::SampleQuotaSpent => Class::PayOrSteer,
+        #[cfg(test)]
+        Key::SampleDepth => Class::Derivable,
         Key::Reads => Class::Diagnostic,
         Key::Misses => Class::Diagnostic,
         Key::BytesClass => Class::Diagnostic,
@@ -418,6 +437,91 @@ pub const fn coarsen_ms(ms: u64) -> u64 {
 #[cfg(test)]
 mod audit {
     use super::*;
+
+    /// What class each key is in, stated ONE BY ONE.
+    ///
+    /// A test that only asserts "no key is in the forbidden class" is passed by
+    /// a classifier that returns a constant, and by an edit that later flattens
+    /// one. This table says what the answer IS, so a wrong answer is a failing
+    /// test rather than a silent reclassification.
+    ///
+    /// **Every real key is `Diagnostic` today, and that is a fact about this
+    /// crate rather than a shortcut.** A key here reports a property of one
+    /// EXECUTION, nothing else reads it, and nobody profits from a wrong
+    /// latency figure that steers nothing (ARCHITECTURE §5) — so none of them
+    /// needs a receipt. The day one of them is not diagnostic, this table
+    /// changes deliberately, in the same commit as the key.
+    const SORTED: &[(Key, Class)] = &[
+        (Key::Reads, Class::Diagnostic),
+        (Key::Misses, Class::Diagnostic),
+        (Key::BytesClass, Class::Diagnostic),
+        (Key::Sent, Class::Diagnostic),
+        (Key::Received, Class::Diagnostic),
+        (Key::CountBucket, Class::Diagnostic),
+        (Key::OffsetMs, Class::Diagnostic),
+        (Key::Attempts, Class::Diagnostic),
+        (Key::Owed, Class::Diagnostic),
+        (Key::Effects, Class::Diagnostic),
+        (Key::Ops, Class::Diagnostic),
+        (Key::Awaiting, Class::Diagnostic),
+        (Key::ReadBack, Class::Diagnostic),
+        (Key::Stranded, Class::Diagnostic),
+        (Key::DroppedMsgs, Class::Diagnostic),
+        (Key::BytesOut, Class::Diagnostic),
+        (Key::BytesIn, Class::Diagnostic),
+        (Key::Ambiguous, Class::Diagnostic),
+    ];
+
+    /// THE CONTROL: the classifier can tell the three classes apart.
+    ///
+    /// Without this, every other test in this module passes against
+    /// `fn class(_) -> Class { Class::Diagnostic }`, because every real key is
+    /// diagnostic. The samples are `cfg(test)` keys that cannot ship and are
+    /// never emitted; they exist so the sort is OBSERVABLE.
+    #[test]
+    fn the_classifier_tells_the_three_classes_apart() {
+        assert_eq!(class(Key::SampleQuotaSpent), Class::PayOrSteer);
+        assert_eq!(class(Key::SampleDepth), Class::Derivable);
+        assert_eq!(class(Key::Reads), Class::Diagnostic);
+
+        // Three distinct answers from the real function. A classifier that
+        // returned a constant would fail here first, and every other test in
+        // this module would still pass — which is why this one exists.
+        let (pay, derivable, diagnostic) = (
+            class(Key::SampleQuotaSpent),
+            class(Key::SampleDepth),
+            class(Key::Reads),
+        );
+        assert!(
+            pay != derivable && derivable != diagnostic && pay != diagnostic,
+            "the classifier gave fewer than three distinct answers \
+             ({pay:?}, {derivable:?}, {diagnostic:?}), so it is \
+             indistinguishable from a constant and proves nothing about any key"
+        );
+    }
+
+    /// Every key's class, one by one.
+    #[test]
+    fn each_key_is_in_the_class_the_table_states() {
+        assert_eq!(
+            SORTED.len(),
+            ALL.len(),
+            "a key was added without being stated in SORTED"
+        );
+        for (k, want) in SORTED {
+            assert_eq!(
+                class(*k),
+                *want,
+                "{k:?} is not in the class the audit states it is in"
+            );
+        }
+        for k in ALL {
+            assert!(
+                SORTED.iter().any(|(s, _)| s == k),
+                "{k:?} is emitted but the audit never states its class"
+            );
+        }
+    }
 
     /// No key may be in the PAY-OR-STEER class.
     ///
