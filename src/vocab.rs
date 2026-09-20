@@ -77,6 +77,20 @@ pub enum Key {
     /// owed one, so a decrement would be a guess written as a fact; this
     /// counts how many times pairing-by-position lost its footing.
     Owed,
+    /// Bytes offered to the socket for one operation, counted at OUR boundary.
+    ///
+    /// A byte COUNT is not derived from content — it is the size of what was
+    /// sent, which the transport already knows — so it is exact rather than
+    /// bucketed. The size of SEALED data is different and goes through
+    /// [`SizeClass`]: a ciphertext's length is a property of its plaintext.
+    ///
+    /// This measures what WE cost, not what a node sends peer-to-peer. Six
+    /// external instruments were rejected trying to infer the latter from
+    /// outside (freenet-contracts#39); only the node can count that, and this
+    /// is the half we are positioned to count honestly.
+    BytesOut,
+    /// Bytes read from the socket for one operation, counted at OUR boundary.
+    BytesIn,
     /// Answers received while [`Owed`](Key::Owed) was non-zero.
     ///
     /// Counted, and deliberately NOT attributed to any operation: an answer

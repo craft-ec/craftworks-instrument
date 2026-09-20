@@ -44,6 +44,19 @@ pub struct Label {
     pub ordinal: u32,
 }
 
+impl Label {
+    /// The operation this label denotes.
+    ///
+    /// Every tool that has needed this derived it the same way and separately
+    /// (`OpId(label.ordinal)`), which is two definitions of one fact waiting to
+    /// disagree. It is stated once here so a recording can cross-reference an
+    /// `Edge` with the `Exit` of the operation it belongs to — which is what
+    /// makes "answered LATE" expressible at all.
+    pub const fn op(self) -> crate::OpId {
+        crate::OpId(self.ordinal)
+    }
+}
+
 impl core::fmt::Display for Label {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}#{}", self.kind.prefix(), self.ordinal)

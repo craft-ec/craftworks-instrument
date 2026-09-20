@@ -10,7 +10,7 @@ use core::cell::RefCell;
 
 use crate::{
     vocab::{Dir, Key, Outcome},
-    Entry, Event, Label, OpId, Probe, Site,
+    Answered, Entry, Event, Label, OpId, Probe, Site,
 };
 
 /// Events kept, and events dropped.
@@ -128,6 +128,128 @@ pub trait Record {
                 _ => None,
             })
             .sum()
+    }
+
+    /// What happened to each LABELLED operation — the projection that ends
+    /// hand-rolled per-key maps.
+    ///
+    /// Both failures this crate was extended for came from a tool counting
+    /// answers instead of matching them. `harness#38`: three puts timed out,
+    /// their acks arrived later, nobody consumed them, and every put from the
+    /// sixth onward received the PREVIOUS put's answer — 0 of 20 reported
+    /// against a node that had accepted 15. `harness#39` run 1: a group waited
+    /// until its ack map held as many entries as it had members, filled the
+    /// quota with LATE ACKS FROM EARLIER GROUPS, and printed 15/15 while its
+    /// own keys went down as never answered.
+    ///
+    /// A count is not a pairing. When an answer NAMES what it answers — a
+    /// `PutResponse` carries the contract key — the recording can say which
+    /// operation ended, and every consumer reads the same answer here instead
+    /// of deriving its own.
+    fn answers(&self) -> Vec<(Label, Answered)> {
+        // Exits keyed by the operation a label denotes, so "late" can mean what
+        // it should: the answer arrived after its own operation was closed.
+        let mut closed: Vec<(OpId, Outcome)> = Vec::new();
+        let mut requested: Vec<(Label, usize)> = Vec::new();
+        let mut answered: Vec<(Label, usize)> = Vec::new();
+        let mut late: Vec<Label> = Vec::new();
+        let bump = |v: &mut Vec<(Label, usize)>, l: Label| match v.iter_mut().find(|(x, _)| *x == l)
+        {
+            Some((_, n)) => *n += 1,
+            None => v.push((l, 1)),
+        };
+        for e in self.events() {
+            match e {
+                Event::Exit { op, outcome, .. } => closed.push((op, outcome)),
+                Event::Edge { dir, id, .. } => match dir {
+                    Dir::Request => bump(&mut requested, id),
+                    Dir::Response => {
+                        bump(&mut answered, id);
+                        // Closed already, and closed because nothing came back.
+                        // An answer arriving now is LATE — it is not evidence
+                        // that the operation succeeded, and it must not be
+                        // allowed to close a different one.
+                        if closed.iter().any(|(op, o)| {
+                            *op == id.op() && matches!(o, Outcome::Timeout | Outcome::Blocked)
+                        }) {
+                            late.push(id);
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+        let mut out: Vec<(Label, Answered)> = Vec::new();
+        for (l, asked) in &requested {
+            let got = answered
+                .iter()
+                .find(|(x, _)| x == l)
+                .map(|(_, n)| *n)
+                .unwrap_or(0);
+            let state = if got == 0 {
+                Answered::Never
+            } else if late.contains(l) {
+                Answered::Late
+            } else if got > *asked {
+                Answered::Twice(got)
+            } else {
+                Answered::Once
+            };
+            out.push((*l, state));
+        }
+        // An answer for something this recorder never asked. Reported, never
+        // attributed to whatever happened to be open.
+        for (l, _) in &answered {
+            if !requested.iter().any(|(x, _)| x == l) {
+                out.push((*l, Answered::Foreign));
+            }
+        }
+        out
+    }
+
+    /// How many operations ended each way, from [`answers`](Record::answers).
+    ///
+    /// One projection feeds a tool's progress line AND its per-key table, so
+    /// the two cannot disagree. A harness assertion that they match becomes a
+    /// property of the recording rather than of each tool — which is what
+    /// turned a 99.5 % ack rate printed over a run whose records said 92.1 %
+    /// into something the tool could catch itself.
+    fn answer_counts(&self) -> Vec<(Answered, usize)> {
+        let mut out: Vec<(Answered, usize)> = Vec::new();
+        for (_, a) in self.answers() {
+            let a = match a {
+                Answered::Twice(_) => Answered::Twice(0),
+                other => other,
+            };
+            match out.iter_mut().find(|(x, _)| *x == a) {
+                Some((_, n)) => *n += 1,
+                None => out.push((a, 1)),
+            }
+        }
+        out
+    }
+
+    /// Bytes counted at OUR boundary for one operation: offered to the socket
+    /// and read from it.
+    ///
+    /// Not what a node sends peer-to-peer — only the node can know that, and
+    /// six external instruments were rejected trying to infer it
+    /// (freenet-contracts#39). This settles what WE cost, where a wrapper
+    /// already exists.
+    fn bytes(&self, op: OpId) -> (u64, u64) {
+        let (mut out, mut inb) = (0u64, 0u64);
+        for e in self.events() {
+            if let Event::Counter { op: o, entry, .. } = e {
+                if o == op {
+                    match entry.key {
+                        Key::BytesOut => out += entry.value,
+                        Key::BytesIn => inb += entry.value,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        (out, inb)
     }
 
     /// How many spans ended each way.

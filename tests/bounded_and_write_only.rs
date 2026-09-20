@@ -19,6 +19,7 @@ fn the_no_op_probe_records_nothing_and_costs_a_call() {
     for i in 0..1000 {
         p.event(Event::Counter {
             site: SITE,
+            op: instrument::OpId::NONE,
             entry: Entry {
                 key: Key::Sent,
                 value: i,

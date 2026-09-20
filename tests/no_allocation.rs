@@ -56,6 +56,7 @@ fn recording_allocates_nothing_after_construction() {
     // Warm anything lazy before arming, so the measurement is of the loop.
     rec.event(Event::Counter {
         site: SITE,
+        op: instrument::OpId::NONE,
         entry: Entry {
             key: Key::Sent,
             value: 0,
@@ -67,6 +68,7 @@ fn recording_allocates_nothing_after_construction() {
     for i in 0..5_000u64 {
         rec.event(Event::Counter {
             site: SITE,
+            op: instrument::OpId::NONE,
             entry: Entry {
                 key: Key::Sent,
                 value: i,

@@ -47,6 +47,7 @@ fn record_a_session(rec: &Recorder) {
         });
         rec.event(Event::Counter {
             site: SITE,
+            op: instrument::OpId::NONE,
             entry: Entry {
                 key: Key::Reads,
                 value: 1,
@@ -55,6 +56,7 @@ fn record_a_session(rec: &Recorder) {
         // The SIZE of the secret, as its padded class — never the length.
         rec.event(Event::Counter {
             site: SITE,
+            op: instrument::OpId::NONE,
             entry: Entry {
                 key: Key::BytesClass,
                 value: SizeClass::of(SECRET.len()) as u64,
@@ -64,6 +66,7 @@ fn record_a_session(rec: &Recorder) {
     // A count derived from user data, bucketed.
     rec.event(Event::Counter {
         site: SITE,
+        op: instrument::OpId::NONE,
         entry: Entry {
             key: Key::CountBucket,
             value: Bucket::of(3) as u64,

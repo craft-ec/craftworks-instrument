@@ -116,6 +116,7 @@ fn a_full_ring_drops_and_counts_and_never_grows<R: Build>() {
     for i in 0..100u64 {
         rec.event(Event::Counter {
             site: SITE,
+            op: instrument::OpId::NONE,
             entry: Entry {
                 key: Key::Sent,
                 value: i,
@@ -192,6 +193,7 @@ fn the_sync_recorder_takes_events_from_many_threads() {
             for i in 0..EACH {
                 rec.event(Event::Counter {
                     site: SITE,
+                    op: instrument::OpId::NONE,
                     entry: Entry {
                         key: Key::Sent,
                         value: t * EACH + i,
