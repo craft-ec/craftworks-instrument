@@ -238,3 +238,45 @@ fn a_per_call_report_carries_counts_and_nothing_else() {
         "stranded is visible without arithmetic: {dump}"
     );
 }
+
+/// Every `DropReason` code is pinned, and no two share a number.
+///
+/// These codes are a WIRE VOCABULARY. A support bundle carries them off the
+/// device and something else decodes them later, so a reason that quietly
+/// changes number — or two reasons that share one — is a silent misreading in
+/// a reader that has no way to know. Same class as a data file whose MEANING
+/// changed while every field stayed where it was.
+///
+/// Pinned exactly rather than asserted to be "stable": a test that only checks
+/// they are distinct would let every value shift together, which breaks any
+/// bundle already written.
+#[test]
+fn drop_reason_codes_are_pinned_and_distinct() {
+    use instrument::vocab::DropReason::*;
+
+    // Each value, by hand. Changing one of these is changing what an already
+    // written bundle means, and it should take an edit here to do it.
+    assert_eq!(Unparseable.code(), 0);
+    assert_eq!(TrailingBytes.code(), 1);
+    assert_eq!(TooLarge.code(), 2);
+    assert_eq!(Unexpected.code(), 3);
+    assert_eq!(NotForUs.code(), 4);
+
+    // And no two share a number — the failure that pinning alone would not
+    // catch if a SIXTH reason were added reusing one.
+    let all = [Unparseable, TrailingBytes, TooLarge, Unexpected, NotForUs];
+    let codes: std::collections::BTreeSet<u64> = all.iter().map(|r| r.code()).collect();
+    assert_eq!(
+        codes.len(),
+        all.len(),
+        "two DropReasons share a code: {:?}",
+        all.iter().map(|r| (*r, r.code())).collect::<Vec<_>>()
+    );
+
+    // The codes are contiguous from zero, which is what lets a reader treat an
+    // unknown one as "newer than me" rather than as corruption.
+    assert_eq!(
+        codes.into_iter().collect::<Vec<_>>(),
+        (0..all.len() as u64).collect::<Vec<_>>()
+    );
+}
