@@ -20,6 +20,30 @@
 //!   passing test is the worst kind of behaviour change).
 //! - **A per-recorder SEQUENCE, never a clock.** A delegate has no clock (F32),
 //!   and a wall-clock stamp is a correlation handle across recordings.
+//! - **A site CANNOT emit text into a recording, even deliberately.** The four
+//!   event shapes carry `Site`, `OpId`, `Outcome`, `Label` and `Entry`, and the
+//!   only string in any of them is `Site`'s `&'static str`. Writing a leak is
+//!   not caught in review — it does not COMPILE:
+//!
+//!   ```compile_fail
+//!   let note: String = std::env::args().next().unwrap_or_default();
+//!   let _ = instrument::Event::Counter {
+//!       site: instrument::Site::of(&note),   // `note` does not live long enough
+//!       op: instrument::OpId::NONE,
+//!       entry: instrument::Entry { key: instrument::Key::Effects, value: 0 },
+//!   };
+//!   ```
+//!
+//!   The guard is the `'static` LIFETIME, not the absence of strings: a value
+//!   derived from user data cannot have that lifetime. The honest limit is that
+//!   `Box::leak` would defeat it — the type system makes an accidental leak
+//!   impossible and a deliberate one obvious, which is the most a type can do.
+//!
+//!   **This is why a `Note(String)` variant "just for diagnostics" must never be
+//!   added.** It would not weaken the rule, it would DELETE the mechanism that
+//!   holds it, and every site would go back to being trusted to remember. The
+//!   reviewed vocabulary would become advice.
+//!
 //! - **No user content by VOCABULARY** — see [`vocab`]. Not "the payload is
 //!   small": every key and enumerated value comes from a reviewed list, because
 //!   the probes ship in production as the support tool.
