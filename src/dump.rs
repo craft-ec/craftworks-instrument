@@ -118,6 +118,12 @@ pub fn render<R: Record + ?Sized>(rec: &R, what: &'static str, last: usize) -> S
         Key::Attempts,
         Key::Owed,
         Key::Ambiguous,
+        Key::Effects,
+        Key::Ops,
+        Key::Awaiting,
+        Key::ReadBack,
+        Key::Stranded,
+        Key::DroppedMsgs,
     ] {
         let t = rec.total(key);
         if t > 0 {

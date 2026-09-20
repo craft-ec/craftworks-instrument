@@ -77,6 +77,33 @@ pub enum Key {
     /// owed one, so a decrement would be a guess written as a fact; this
     /// counts how many times pairing-by-position lost its footing.
     Owed,
+    /// Effects the core returned in one delegate call.
+    ///
+    /// These six are the delegate's PER-CALL REPORT. They exist because a
+    /// delegate prints nothing and the node says nothing about it, so five
+    /// different breaks in the write path all presented as one symptom — a
+    /// write that stops at `Accepted` — and these counts are what separated
+    /// them. Every one is a number the engine already had; none is derived
+    /// from user data.
+    Effects,
+    /// Node operations issued in one delegate call.
+    Ops,
+    /// Blocks put and not yet read back.
+    Awaiting,
+    /// Puts confirmed by reading them back.
+    ///
+    /// The read-back, not the acknowledgement: `durable` has always meant the
+    /// block can be SERVED, never that an operation finished (F22/F31).
+    ReadBack,
+    /// Effects still queued when the call ended, and therefore LOST.
+    ///
+    /// Must be zero. It is recorded rather than asserted so that a non-zero one
+    /// is visible in a dump without anybody doing arithmetic.
+    Stranded,
+    /// Inbound messages this build could not use, by reason.
+    ///
+    /// The reason is a closed vocabulary — see [`DropReason`] — never a string.
+    DroppedMsgs,
     /// Bytes offered to the socket for one operation, counted at OUR boundary.
     ///
     /// A byte COUNT is not derived from content — it is the size of what was
@@ -99,6 +126,41 @@ pub enum Key {
     /// no longer trustworthy, which is exactly what the healthy-looking line
     /// over a shifted stream failed to say.
     Ambiguous,
+}
+
+/// Why an inbound message was discarded.
+///
+/// Closed, and mirroring the protocol's own `Dropped` — a reason is a
+/// vocabulary value, never a string. A free-text reason is the easiest place
+/// for user data to arrive by accident, and this one crosses into a support
+/// bundle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum DropReason {
+    /// Not a message this build can read at all.
+    Unparseable,
+    /// Trailing bytes: the prefix parsed, and a prefix is not a message.
+    TrailingBytes,
+    /// Bigger than this build will decode.
+    TooLarge,
+    /// A response about something nobody asked for.
+    Unexpected,
+    /// A message kind this side has no use for.
+    NotForUs,
+}
+
+impl DropReason {
+    /// A small stable integer, so a reason can ride in a `Counter` without a
+    /// second event shape.
+    pub const fn code(self) -> u64 {
+        match self {
+            DropReason::Unparseable => 0,
+            DropReason::TrailingBytes => 1,
+            DropReason::TooLarge => 2,
+            DropReason::Unexpected => 3,
+            DropReason::NotForUs => 4,
+        }
+    }
 }
 
 /// How an operation ended.
