@@ -193,6 +193,19 @@ pub enum Key {
     /// no longer trustworthy, which is exactly what the healthy-looking line
     /// over a shifted stream failed to say.
     Ambiguous,
+    /// The WIDTH, in hex characters, of a record id a read was handed — 32 or
+    /// 64 — when it did not match the width its domain keys by.
+    ///
+    /// A read answers "not found" for an id its domain cannot address (the ids
+    /// reaching a read come from outside: a stale link, an id stored before a
+    /// domain declared a parent — craftworks-sdk#118). That is honest, and it
+    /// makes one programmer error SILENT: a caller that truncated a 64-hex id.
+    /// This pair keeps that diagnosable without a throw. Only the widths: never
+    /// the id, and never the domain, whose name is the app's and so falls
+    /// under the vocabulary rule.
+    IdWidthGiven,
+    /// The width its domain wanted — see [`IdWidthGiven`](Key::IdWidthGiven).
+    IdWidthWanted,
 
     /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
     ///
@@ -245,6 +258,8 @@ pub const ALL: &[Key] = &[
     Key::BytesOut,
     Key::BytesIn,
     Key::Ambiguous,
+    Key::IdWidthGiven,
+    Key::IdWidthWanted,
 ];
 
 /// Which of the three audit classes a [`Key`] falls in.
@@ -301,6 +316,10 @@ pub const fn class(k: Key) -> Class {
         Key::BytesOut => Class::Diagnostic,
         Key::BytesIn => Class::Diagnostic,
         Key::Ambiguous => Class::Diagnostic,
+        // A property of one read. Nothing reads it back and nothing steers on
+        // it, so it needs no receipt.
+        Key::IdWidthGiven => Class::Diagnostic,
+        Key::IdWidthWanted => Class::Diagnostic,
     }
 }
 
@@ -470,6 +489,8 @@ mod audit {
         (Key::BytesOut, Class::Diagnostic),
         (Key::BytesIn, Class::Diagnostic),
         (Key::Ambiguous, Class::Diagnostic),
+        (Key::IdWidthGiven, Class::Diagnostic),
+        (Key::IdWidthWanted, Class::Diagnostic),
     ];
 
     /// THE CONTROL: the classifier can tell the three classes apart.
