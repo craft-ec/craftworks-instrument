@@ -207,6 +207,33 @@ pub enum Key {
     /// The width its domain wanted — see [`IdWidthGiven`](Key::IdWidthGiven).
     IdWidthWanted,
 
+    /// The retransmission timeout a sender USED, in milliseconds, coarsened
+    /// ([`coarsen_ms`]): at the moment it armed an operation, and after each
+    /// round-trip sample.
+    ///
+    /// These four keys are the page's retry clock (craftworks-sdk#386,
+    /// sdk#397). It had to be reconstructed from wire frames once: a lost PUT
+    /// waited a minute though its siblings answered in two seconds, and the
+    /// cause -- requests dated against a clock started at 0, so the first
+    /// answers were "samples" of ~1.8e12 ms that pinned the timeout at its
+    /// ceiling -- was invisible to everything that recorded.
+    ///
+    /// NOT derivable: the RTO is a function of the samples, but re-deriving it
+    /// means REPLAYING the estimator, which assumes the very code a reader is
+    /// diagnosing is right. This is what the sender actually used.
+    RtoMs,
+    /// A round-trip SAMPLE a sender fed its estimator, in milliseconds,
+    /// coarsened. The value as the sender computed it -- a wrong clock shows
+    /// here as an impossible sample, which is the point.
+    SampleMs,
+    /// When an operation is due to be sent again if unanswered: an OFFSET from
+    /// the start of the recording in milliseconds, coarsened -- never the
+    /// sender's own clock, which is a correlation handle.
+    ArmedAtMs,
+    /// Where a RE-ARM moved an operation's deadline (an answer to another
+    /// operation restarted its timer): an offset like [`ArmedAtMs`](Key::ArmedAtMs).
+    ReArmedAtMs,
+
     /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
     ///
     /// Every real key in this crate is [`Class::Diagnostic`], which leaves the
@@ -260,6 +287,10 @@ pub const ALL: &[Key] = &[
     Key::Ambiguous,
     Key::IdWidthGiven,
     Key::IdWidthWanted,
+    Key::RtoMs,
+    Key::SampleMs,
+    Key::ArmedAtMs,
+    Key::ReArmedAtMs,
 ];
 
 /// Which of the three audit classes a [`Key`] falls in.
@@ -320,6 +351,12 @@ pub const fn class(k: Key) -> Class {
         // it, so it needs no receipt.
         Key::IdWidthGiven => Class::Diagnostic,
         Key::IdWidthWanted => Class::Diagnostic,
+        // The page's retry clock: what one sender used and measured, in one
+        // execution. Nothing reads it back and nothing steers on it.
+        Key::RtoMs => Class::Diagnostic,
+        Key::SampleMs => Class::Diagnostic,
+        Key::ArmedAtMs => Class::Diagnostic,
+        Key::ReArmedAtMs => Class::Diagnostic,
     }
 }
 
@@ -491,6 +528,10 @@ mod audit {
         (Key::Ambiguous, Class::Diagnostic),
         (Key::IdWidthGiven, Class::Diagnostic),
         (Key::IdWidthWanted, Class::Diagnostic),
+        (Key::RtoMs, Class::Diagnostic),
+        (Key::SampleMs, Class::Diagnostic),
+        (Key::ArmedAtMs, Class::Diagnostic),
+        (Key::ReArmedAtMs, Class::Diagnostic),
     ];
 
     /// THE CONTROL: the classifier can tell the three classes apart.
