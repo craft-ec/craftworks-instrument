@@ -280,3 +280,115 @@ fn drop_reason_codes_are_pinned_and_distinct() {
         (0..all.len() as u64).collect::<Vec<_>>()
     );
 }
+
+/// Every `StatusClass` code is pinned, distinct and contiguous, for the same
+/// reason as `DropReason`'s: a bundle is decoded long after it was written.
+/// And `of_http` sorts the statuses the SDK's loader meets.
+#[test]
+fn status_class_codes_are_pinned_and_distinct() {
+    use instrument::vocab::StatusClass::{self, *};
+    assert_eq!(Ok.code(), 0);
+    assert_eq!(NotFound.code(), 1);
+    assert_eq!(ServerError.code(), 2);
+    assert_eq!(OtherHttp.code(), 3);
+    assert_eq!(Abort.code(), 4);
+    assert_eq!(NetworkError.code(), 5);
+    let codes: Vec<u64> = StatusClass::ALL.iter().map(|c| c.code()).collect();
+    assert_eq!(
+        codes,
+        (0..StatusClass::ALL.len() as u64).collect::<Vec<_>>(),
+        "not contiguous from zero, or ALL is out of order"
+    );
+    for (status, want) in [
+        (200, Ok),
+        (206, Ok),
+        (404, NotFound),
+        (503, ServerError),
+        (500, ServerError),
+        (403, OtherHttp),
+        (302, OtherHttp),
+    ] {
+        assert_eq!(StatusClass::of_http(status), want, "{status}");
+    }
+}
+
+/// The coarsening rule is its DATA: `coarsen_ms` is computed from
+/// `COARSEN_BANDS`, which a generator copies to another language, so the
+/// bands and the function cannot disagree. Pinned at each edge, and no
+/// ceiling (a wrong clock's 1.8e12 ms sample stays itself).
+#[test]
+fn coarsening_is_its_bands() {
+    use instrument::vocab::{coarsen_ms, COARSEN_BANDS, COARSEN_LAST_GRAIN};
+    assert_eq!(COARSEN_BANDS, [(1_000, 10), (60_000, 100)]);
+    assert_eq!(COARSEN_LAST_GRAIN, 1_000);
+    for (ms, want) in [
+        (0, 0),
+        (9, 0),
+        (999, 990),
+        (1_000, 1_000),
+        (1_099, 1_000),
+        (59_999, 59_900),
+        (60_000, 60_000),
+        (60_999, 60_000),
+        (1_790_253_181_367, 1_790_253_181_000),
+    ] {
+        assert_eq!(coarsen_ms(ms), want, "{ms}");
+    }
+}
+
+/// Every label KIND has its own prefix, pinned: a dump names `req#3` and `fetch#3` apart, and a page's sends and
+/// the SDK loader's fetch rounds (`Kind::Fetch`, craftworks-sdk) are two sequences that must never collide in one
+/// recording. A label carries only a kind and an ordinal -- nothing of the id it stands for.
+#[test]
+fn every_label_kind_has_its_own_prefix() {
+    use instrument::{Kind, Label};
+    let kinds = [
+        Kind::Block,
+        Kind::Peer,
+        Kind::Contract,
+        Kind::Request,
+        Kind::Fetch,
+    ];
+    let prefixes: Vec<&str> = kinds.iter().map(|k| k.prefix()).collect();
+    assert_eq!(prefixes, ["block", "peer", "contract", "req", "fetch"]);
+    let distinct: std::collections::BTreeSet<&str> = prefixes.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        kinds.len(),
+        "two kinds share a prefix: {prefixes:?}"
+    );
+    assert_ne!(
+        Label {
+            kind: Kind::Request,
+            ordinal: 3
+        },
+        Label {
+            kind: Kind::Fetch,
+            ordinal: 3
+        },
+        "a fetch round and a page send with one ordinal are the same label"
+    );
+    assert_eq!(
+        Label {
+            kind: Kind::Fetch,
+            ordinal: 3
+        }
+        .to_string(),
+        "fetch#3"
+    );
+}
+
+/// The HTTP classification is its TABLE (`HTTP_CLASSES`), which a generator copies to the SDK's JS loader: pinned,
+/// and `of_http` computed from it, so the two cannot disagree.
+#[test]
+fn http_classification_is_its_table() {
+    use instrument::vocab::{StatusClass, HTTP_CLASSES};
+    assert_eq!(
+        HTTP_CLASSES,
+        [
+            (200, 299, StatusClass::Ok),
+            (404, 404, StatusClass::NotFound),
+            (500, 599, StatusClass::ServerError)
+        ]
+    );
+}

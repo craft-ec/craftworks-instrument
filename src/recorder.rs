@@ -170,7 +170,11 @@ pub trait Record {
                         // that the operation succeeded, and it must not be
                         // allowed to close a different one.
                         if closed.iter().any(|(op, o)| {
-                            *op == id.op() && matches!(o, Outcome::Timeout | Outcome::Blocked)
+                            *op == id.op()
+                                && matches!(
+                                    o,
+                                    Outcome::Timeout | Outcome::Blocked | Outcome::Withdrawn
+                                )
                         }) {
                             late.push(id);
                         }
