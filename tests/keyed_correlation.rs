@@ -328,3 +328,23 @@ fn labelled_edges_cannot_move_a_latency_median() {
         "labelling adds {over_a_run:.1} ms over a long run, which is not inside one grid step"
     );
 }
+
+/// A WITHDRAWN operation (superseded, cancelled, stood in for) is CLOSED like a timed-out one: an answer that
+/// arrives after it is LATE, not a success, and it closes nothing else (craftworks-sdk#407: a send superseded by
+/// a later send of the same operation). Mutant "Withdrawn is not a close" -> this reads `Once`.
+#[test]
+fn an_answer_after_a_withdrawal_is_late() {
+    let rec = Recorder::with_capacity(16);
+    rec.event(Event::Edge {
+        site: S,
+        dir: Dir::Request,
+        id: l(1),
+    });
+    rec.event(Event::Exit {
+        site: S,
+        op: l(1).op(),
+        outcome: Outcome::Withdrawn,
+    });
+    ans(&rec, 1);
+    assert_eq!(state(&rec, 1), Some(Answered::Late));
+}

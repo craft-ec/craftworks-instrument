@@ -233,6 +233,11 @@ pub enum Key {
     /// Where a RE-ARM moved an operation's deadline (an answer to another
     /// operation restarted its timer): an offset like [`ArmedAtMs`](Key::ArmedAtMs).
     ReArmedAtMs,
+    /// How ONE round of a fetch ended, as a [`StatusClass`] code: the
+    /// SDK loader's `served()` / `raceK` (craftworks-sdk, the bootstrap fetch
+    /// that runs before the page exists). A class, never the status line or
+    /// the URL -- a URL names the file, and the file is the app's.
+    StatusClass,
 
     /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
     ///
@@ -291,6 +296,7 @@ pub const ALL: &[Key] = &[
     Key::SampleMs,
     Key::ArmedAtMs,
     Key::ReArmedAtMs,
+    Key::StatusClass,
 ];
 
 /// Which of the three audit classes a [`Key`] falls in.
@@ -357,6 +363,8 @@ pub const fn class(k: Key) -> Class {
         Key::SampleMs => Class::Diagnostic,
         Key::ArmedAtMs => Class::Diagnostic,
         Key::ReArmedAtMs => Class::Diagnostic,
+        // How one fetch round ended: one loader, one execution.
+        Key::StatusClass => Class::Diagnostic,
     }
 }
 
@@ -406,6 +414,65 @@ pub enum Outcome {
     Refused(u16),
     Blocked,
     Timeout,
+    /// Nobody needs it any more: SUPERSEDED by a later send of the same
+    /// operation, cancelled, or stood in for. Not [`Blocked`](Outcome::Blocked)
+    /// -- that says something stopped it -- and one word per meaning, or a
+    /// reader of a dump misreads a superseded send as a stuck one (the
+    /// architect on craftworks-sdk#407).
+    Withdrawn,
+}
+
+/// How ONE round of a fetch ended ([`Key::StatusClass`]): closed, so no status
+/// line, URL or body can ride in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatusClass {
+    /// A 2xx answer: the file.
+    Ok,
+    /// 404: this source does not hold it (yet).
+    NotFound,
+    /// A 5xx answer.
+    ServerError,
+    /// Any other HTTP status.
+    OtherHttp,
+    /// Cancelled on this side (a person's cancel, or a race that had enough).
+    Abort,
+    /// No HTTP answer at all: the request or its body failed.
+    NetworkError,
+}
+
+impl StatusClass {
+    /// Every class, for a generator or a test to visit.
+    pub const ALL: [StatusClass; 6] = [
+        StatusClass::Ok,
+        StatusClass::NotFound,
+        StatusClass::ServerError,
+        StatusClass::OtherHttp,
+        StatusClass::Abort,
+        StatusClass::NetworkError,
+    ];
+
+    /// A small stable integer (a [`Key::StatusClass`] value). Pinned by a
+    /// test: a support bundle is decoded long after it was written.
+    pub const fn code(self) -> u64 {
+        match self {
+            StatusClass::Ok => 0,
+            StatusClass::NotFound => 1,
+            StatusClass::ServerError => 2,
+            StatusClass::OtherHttp => 3,
+            StatusClass::Abort => 4,
+            StatusClass::NetworkError => 5,
+        }
+    }
+
+    /// The class of an HTTP status.
+    pub const fn of_http(status: u16) -> StatusClass {
+        match status {
+            200..=299 => StatusClass::Ok,
+            404 => StatusClass::NotFound,
+            500..=599 => StatusClass::ServerError,
+            _ => StatusClass::OtherHttp,
+        }
+    }
 }
 
 /// Which way an [`Edge`](crate::Event::Edge) points.
@@ -481,14 +548,24 @@ impl Bucket {
 /// and a correlation handle across recordings. A coarse offset says how long
 /// something took without saying when it happened.
 pub const fn coarsen_ms(ms: u64) -> u64 {
-    if ms < 1_000 {
-        (ms / 10) * 10
-    } else if ms < 60_000 {
-        (ms / 100) * 100
-    } else {
-        (ms / 1_000) * 1_000
+    let mut i = 0;
+    while i < COARSEN_BANDS.len() {
+        let (below, grain) = COARSEN_BANDS[i];
+        if ms < below {
+            return (ms / grain) * grain;
+        }
+        i += 1;
     }
+    (ms / COARSEN_LAST_GRAIN) * COARSEN_LAST_GRAIN
 }
+
+/// THE coarsening rule as data: `(below this many ms, round down to this
+/// grain)`, in order, then [`COARSEN_LAST_GRAIN`] for everything longer. Data
+/// so a recorder in another language is GENERATED from it rather than
+/// re-implemented by hand (the SDK's loader, craftworks-sdk).
+pub const COARSEN_BANDS: [(u64, u64); 2] = [(1_000, 10), (60_000, 100)];
+/// The grain past the last band. No ceiling: a 1.8e12 ms value stays itself.
+pub const COARSEN_LAST_GRAIN: u64 = 1_000;
 
 #[cfg(test)]
 mod audit {
@@ -532,6 +609,7 @@ mod audit {
         (Key::SampleMs, Class::Diagnostic),
         (Key::ArmedAtMs, Class::Diagnostic),
         (Key::ReArmedAtMs, Class::Diagnostic),
+        (Key::StatusClass, Class::Diagnostic),
     ];
 
     /// THE CONTROL: the classifier can tell the three classes apart.
