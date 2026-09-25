@@ -104,7 +104,7 @@ pub fn render<R: Record + ?Sized>(rec: &R, what: &'static str, last: usize) -> S
         );
     }
     for (site, op) in unfinished.iter().take(8) {
-        let _ = writeln!(s, "   entered and never exited: {}#{}", site.name(), op.0);
+        let _ = writeln!(s, "   entered and never exited: {}", op_name(*site, *op));
     }
     for (o, n) in rec.outcomes() {
         let _ = writeln!(s, "   outcome {o:?}: {n}");
@@ -150,11 +150,21 @@ pub fn render<R: Record + ?Sized>(rec: &R, what: &'static str, last: usize) -> S
     s
 }
 
+/// How a dump names an operation: `site#n` for a plain id (a span's, or a
+/// `req#n`'s -- the form it has always had), and `site kind#n` for a label of
+/// another kind, so `fetch#1` never reads as `req#1`.
+fn op_name(site: crate::Site, op: crate::OpId) -> String {
+    match crate::Label::of_op(op) {
+        Some(l) if l.kind() != crate::Kind::Request => format!("{} {l}", site.name()),
+        _ => format!("{}#{}", site.name(), op.0),
+    }
+}
+
 fn one(e: &Event) -> String {
     match e {
-        Event::Enter { site, op } => format!("enter  {}#{}", site.name(), op.0),
+        Event::Enter { site, op } => format!("enter  {}", op_name(*site, *op)),
         Event::Exit { site, op, outcome } => {
-            format!("exit   {}#{} {outcome:?}", site.name(), op.0)
+            format!("exit   {} {outcome:?}", op_name(*site, *op))
         }
         Event::Counter { site, op, entry } => {
             // The operation is shown only when the counter belongs to one; a
@@ -164,9 +174,8 @@ fn one(e: &Event) -> String {
                 format!("count  {} {:?}={}", site.name(), entry.key, entry.value)
             } else {
                 format!(
-                    "count  {}#{} {:?}={}",
-                    site.name(),
-                    op.0,
+                    "count  {} {:?}={}",
+                    op_name(*site, *op),
                     entry.key,
                     entry.value
                 )

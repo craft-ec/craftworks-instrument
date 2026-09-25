@@ -28,9 +28,49 @@ pub enum Kind {
     /// sequence of its own, apart from a page's sends ([`Kind::Request`]), so
     /// the two never collide in one recording.
     Fetch,
+    /// A SPAN (`Enter`/`Exit`) a recorder's user numbers itself: its own
+    /// sequence, so a span never shares an operation id with a request.
+    Span,
 }
 
 impl Kind {
+    /// Every kind, for a test or a reader to visit.
+    pub const ALL: [Kind; 6] = [
+        Kind::Request,
+        Kind::Block,
+        Kind::Peer,
+        Kind::Contract,
+        Kind::Fetch,
+        Kind::Span,
+    ];
+
+    /// A small stable integer, carried in the top bits of the operation a label
+    /// denotes ([`Label::op`]). Pinned by a test. `Request` is 0, so the op of
+    /// every `req#n` is the plain `OpId(n)` it has always been.
+    pub const fn code(self) -> u32 {
+        match self {
+            Kind::Request => 0,
+            Kind::Block => 1,
+            Kind::Peer => 2,
+            Kind::Contract => 3,
+            Kind::Fetch => 4,
+            Kind::Span => 5,
+        }
+    }
+
+    /// The kind a [`code`](Kind::code) names, if any.
+    pub const fn of_code(code: u32) -> Option<Kind> {
+        match code {
+            0 => Some(Kind::Request),
+            1 => Some(Kind::Block),
+            2 => Some(Kind::Peer),
+            3 => Some(Kind::Contract),
+            4 => Some(Kind::Fetch),
+            5 => Some(Kind::Span),
+            _ => None,
+        }
+    }
+
     pub const fn prefix(self) -> &'static str {
         match self {
             Kind::Block => "block",
@@ -38,18 +78,42 @@ impl Kind {
             Kind::Contract => "contract",
             Kind::Request => "req",
             Kind::Fetch => "fetch",
+            Kind::Span => "span",
         }
     }
 }
 
 /// `peer#3` — fixed size, `Copy`, and carrying nothing of the id itself.
+///
+/// Made only by [`Label::new`], which refuses an ordinal that would spill into
+/// the kind bits of its operation id ([`MAX_ORDINAL`]): a sequence that reached
+/// it would otherwise land in another kind's range -- the collision `op()`
+/// exists to prevent, only later.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Label {
-    pub kind: Kind,
-    pub ordinal: u32,
+    kind: Kind,
+    ordinal: u32,
 }
 
 impl Label {
+    /// A label, or `None` for an ordinal past [`MAX_ORDINAL`]. A caller whose
+    /// sequence reaches it stops labelling and says so; it never wraps.
+    pub const fn new(kind: Kind, ordinal: u32) -> Option<Label> {
+        if ordinal > MAX_ORDINAL {
+            None
+        } else {
+            Some(Label { kind, ordinal })
+        }
+    }
+
+    pub const fn kind(self) -> Kind {
+        self.kind
+    }
+
+    pub const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+
     /// The operation this label denotes.
     ///
     /// Every tool that has needed this derived it the same way and separately
@@ -57,10 +121,39 @@ impl Label {
     /// disagree. It is stated once here so a recording can cross-reference an
     /// `Edge` with the `Exit` of the operation it belongs to — which is what
     /// makes "answered LATE" expressible at all.
+    ///
+    /// The KIND is part of it: `fetch#1` and `req#1` are two operations, and an
+    /// `OpId` that forgot the kind made them one -- a loader round's `Exit`
+    /// then closed a page send of the same ordinal, and `answers()` called that
+    /// send LATE (found by craftworks-sdk's loader handover, one recording with
+    /// both sequences). The kind's [`code`](Kind::code) rides in the top
+    /// [`KIND_BITS`] bits; the ordinal keeps the rest ([`MAX_ORDINAL`]), and a
+    /// larger one cannot be made ([`Label::new`]).
     pub const fn op(self) -> crate::OpId {
-        crate::OpId(self.ordinal)
+        crate::OpId::from_label(self.kind.code(), self.ordinal)
+    }
+
+    /// The label an operation id denotes, when it was made by [`Label::op`]:
+    /// `None` for [`OpId::NONE`](crate::OpId::NONE) and for a kind code no
+    /// [`Kind`] has.
+    pub const fn of_op(op: crate::OpId) -> Option<Label> {
+        let raw = op.raw();
+        match Kind::of_code(raw >> ORDINAL_BITS) {
+            Some(kind) => Some(Label {
+                kind,
+                ordinal: raw & MAX_ORDINAL,
+            }),
+            None => None,
+        }
     }
 }
+
+/// Bits of an [`OpId`](crate::OpId) that carry a label's [`Kind`].
+pub const KIND_BITS: u32 = 3;
+/// Bits that carry its ordinal.
+pub const ORDINAL_BITS: u32 = 32 - KIND_BITS;
+/// The largest ordinal an operation id carries whole.
+pub const MAX_ORDINAL: u32 = (1 << ORDINAL_BITS) - 1;
 
 impl core::fmt::Display for Label {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

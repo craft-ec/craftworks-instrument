@@ -12,10 +12,7 @@ use instrument::{
 const S: Site = Site::of("test::transport");
 
 fn l(n: u32) -> Label {
-    Label {
-        kind: Kind::Request,
-        ordinal: n,
-    }
+    Label::new(Kind::Request, n).unwrap()
 }
 fn req(rec: &Recorder, n: u32) {
     rec.event(Event::Edge {

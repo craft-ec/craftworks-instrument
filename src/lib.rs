@@ -66,17 +66,38 @@ pub use vocab::{Bucket, Dir, Key, Outcome, Site, SizeClass};
 /// is not — which is why the spine is frozen and small, and everything that
 /// churns rides in the payload. The same append-only rule ARCHITECTURE §19
 /// already imposes on record encodings.
-pub const STREAM_VERSION: u16 = 1;
+///
+/// 2: an operation id CARRIES its label's kind (`Label::op`), so the same value
+/// means something else than in version 1 -- a format change though no field
+/// moved (craftworks-sdk's loader handover found `fetch#1` and `req#1`
+/// colliding in one recording).
+pub const STREAM_VERSION: u16 = 2;
 
 /// Correlates the parts of one operation.
+///
+/// Made ONLY by [`Label::op`] -- which puts the label's [`Kind`] in the top
+/// bits -- or [`OpId::NONE`]. The field is private: a raw id chosen by hand
+/// would sit in kind 0's range and collide with a real label's operation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
-pub struct OpId(pub u32);
+pub struct OpId(u32);
 
 impl OpId {
     /// A counter that belongs to no single operation — a connection-wide total,
     /// a ring drop. A sentinel rather than an `Option` so the event stays
-    /// `Copy` and the same size whatever it carries.
+    /// `Copy` and the same size whatever it carries. DISJOINT from every
+    /// label's operation: its top bits are kind code 7, which no [`Kind`] has
+    /// (a test enumerates them).
     pub const NONE: OpId = OpId(u32::MAX);
+
+    /// The id as a number, for a reader of a recording.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
+    /// `Label::op`'s encoding: the kind's code in the top bits. Crate-private.
+    pub(crate) const fn from_label(code: u32, ordinal: u32) -> OpId {
+        OpId((code << label::ORDINAL_BITS) | ordinal)
+    }
 }
 
 /// What happened to a labelled operation, as the RECORDING sees it.
