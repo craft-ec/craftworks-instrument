@@ -335,3 +335,60 @@ fn coarsening_is_its_bands() {
         assert_eq!(coarsen_ms(ms), want, "{ms}");
     }
 }
+
+/// Every label KIND has its own prefix, pinned: a dump names `req#3` and `fetch#3` apart, and a page's sends and
+/// the SDK loader's fetch rounds (`Kind::Fetch`, craftworks-sdk) are two sequences that must never collide in one
+/// recording. A label carries only a kind and an ordinal -- nothing of the id it stands for.
+#[test]
+fn every_label_kind_has_its_own_prefix() {
+    use instrument::{Kind, Label};
+    let kinds = [
+        Kind::Block,
+        Kind::Peer,
+        Kind::Contract,
+        Kind::Request,
+        Kind::Fetch,
+    ];
+    let prefixes: Vec<&str> = kinds.iter().map(|k| k.prefix()).collect();
+    assert_eq!(prefixes, ["block", "peer", "contract", "req", "fetch"]);
+    let distinct: std::collections::BTreeSet<&str> = prefixes.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        kinds.len(),
+        "two kinds share a prefix: {prefixes:?}"
+    );
+    assert_ne!(
+        Label {
+            kind: Kind::Request,
+            ordinal: 3
+        },
+        Label {
+            kind: Kind::Fetch,
+            ordinal: 3
+        },
+        "a fetch round and a page send with one ordinal are the same label"
+    );
+    assert_eq!(
+        Label {
+            kind: Kind::Fetch,
+            ordinal: 3
+        }
+        .to_string(),
+        "fetch#3"
+    );
+}
+
+/// The HTTP classification is its TABLE (`HTTP_CLASSES`), which a generator copies to the SDK's JS loader: pinned,
+/// and `of_http` computed from it, so the two cannot disagree.
+#[test]
+fn http_classification_is_its_table() {
+    use instrument::vocab::{StatusClass, HTTP_CLASSES};
+    assert_eq!(
+        HTTP_CLASSES,
+        [
+            (200, 299, StatusClass::Ok),
+            (404, 404, StatusClass::NotFound),
+            (500, 599, StatusClass::ServerError)
+        ]
+    );
+}

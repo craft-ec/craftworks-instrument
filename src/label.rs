@@ -24,6 +24,10 @@ pub enum Kind {
     Peer,
     Contract,
     Request,
+    /// One round of the SDK loader's bootstrap fetch (craftworks-sdk): a
+    /// sequence of its own, apart from a page's sends ([`Kind::Request`]), so
+    /// the two never collide in one recording.
+    Fetch,
 }
 
 impl Kind {
@@ -33,6 +37,7 @@ impl Kind {
             Kind::Peer => "peer",
             Kind::Contract => "contract",
             Kind::Request => "req",
+            Kind::Fetch => "fetch",
         }
     }
 }

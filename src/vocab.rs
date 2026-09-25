@@ -464,16 +464,29 @@ impl StatusClass {
         }
     }
 
-    /// The class of an HTTP status.
+    /// The class of an HTTP status: the first [`HTTP_CLASSES`] range that holds
+    /// it, else [`OtherHttp`](StatusClass::OtherHttp). Computed from the table
+    /// so another language's recorder is GENERATED from the same rule.
     pub const fn of_http(status: u16) -> StatusClass {
-        match status {
-            200..=299 => StatusClass::Ok,
-            404 => StatusClass::NotFound,
-            500..=599 => StatusClass::ServerError,
-            _ => StatusClass::OtherHttp,
+        let mut i = 0;
+        while i < HTTP_CLASSES.len() {
+            let (lo, hi, class) = HTTP_CLASSES[i];
+            if status >= lo && status <= hi {
+                return class;
+            }
+            i += 1;
         }
+        StatusClass::OtherHttp
     }
 }
+
+/// THE HTTP classification as data: `(lowest, highest, class)`, first match
+/// wins, anything else is [`StatusClass::OtherHttp`].
+pub const HTTP_CLASSES: [(u16, u16, StatusClass); 3] = [
+    (200, 299, StatusClass::Ok),
+    (404, 404, StatusClass::NotFound),
+    (500, 599, StatusClass::ServerError),
+];
 
 /// Which way an [`Edge`](crate::Event::Edge) points.
 ///
