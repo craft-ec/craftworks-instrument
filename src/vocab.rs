@@ -253,6 +253,10 @@ pub enum Key {
     RecordBytesRead,
     /// Bytes of records of one data domain written — see [`RecordBytesRead`](Key::RecordBytesRead).
     RecordBytesWritten,
+    /// A line SAID to the app at this site (an `unusable` line, craftworks-sdk#482): COUNTED here, one per line, with
+    /// no text -- the SITE names which line; the text itself (which can name keys, or a node's refusal) stays only in
+    /// the app's own drained list, never in a recording.
+    Said,
 
     /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
     ///
@@ -317,6 +321,7 @@ pub const ALL: &[Key] = &[
     Key::RecordFails,
     Key::RecordBytesRead,
     Key::RecordBytesWritten,
+    Key::Said,
 ];
 
 /// Which of the three audit classes a [`Key`] falls in.
@@ -392,6 +397,7 @@ pub const fn class(k: Key) -> Class {
         Key::RecordFails => Class::Diagnostic,
         Key::RecordBytesRead => Class::Diagnostic,
         Key::RecordBytesWritten => Class::Diagnostic,
+        Key::Said => Class::Diagnostic,
     }
 }
 
@@ -485,7 +491,8 @@ pub const fn publish(k: Key) -> Publish {
         | Key::RtoMs
         | Key::SampleMs
         | Key::ArmedAtMs
-        | Key::ReArmedAtMs => Publish::Local,
+        | Key::ReArmedAtMs
+        | Key::Said => Publish::Local,
     }
 }
 
@@ -761,6 +768,7 @@ mod audit {
         (Key::RecordFails, Class::Diagnostic),
         (Key::RecordBytesRead, Class::Diagnostic),
         (Key::RecordBytesWritten, Class::Diagnostic),
+        (Key::Said, Class::Diagnostic),
     ];
 
     /// THE CONTROL: the classifier can tell the three classes apart.
