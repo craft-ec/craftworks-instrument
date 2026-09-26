@@ -10,7 +10,7 @@ use instrument::{
     dump::render,
     label::{Kind, Labels},
     vocab::{Dir, Key, Outcome, Site},
-    Entry, Event, OpId, Probe, Record, Recorder, Span, SyncRecorder,
+    Entry, Event, Probe, Record, Recorder, Span, SyncRecorder,
 };
 
 const SITE: Site = Site::of("test::both");
@@ -151,11 +151,23 @@ fn a_full_ring_drops_and_counts_and_never_grows<R: Build>() {
 fn a_span_exits_even_when_dropped<R: Build>() {
     let rec = R::build(64);
     {
-        let s = Span::enter(&rec, SITE, OpId(9));
+        let s = Span::enter(
+            &rec,
+            SITE,
+            instrument::Label::new(instrument::Kind::Span, 9)
+                .unwrap()
+                .op(),
+        );
         s.finish(Outcome::Missing);
     }
     {
-        let _s = Span::enter(&rec, SITE, OpId(10));
+        let _s = Span::enter(
+            &rec,
+            SITE,
+            instrument::Label::new(instrument::Kind::Span, 10)
+                .unwrap()
+                .op(),
+        );
     }
     let r = rec.read();
     assert!(r.unfinished().is_empty(), "{}", R::WHICH);
@@ -166,11 +178,13 @@ fn an_unfinished_span_is_named<R: Build>() {
     let rec = R::build(64);
     rec.event(Event::Enter {
         site: SITE,
-        op: OpId(42),
+        op: instrument::Label::new(instrument::Kind::Span, 42)
+            .unwrap()
+            .op(),
     });
     let text = render(&rec.read(), "wedge", 5);
     assert!(text.contains("unfinished spans 1"), "{} {text}", R::WHICH);
-    assert!(text.contains("test::both#42"), "{} {text}", R::WHICH);
+    assert!(text.contains("test::both span#42"), "{} {text}", R::WHICH);
 }
 
 // ---- and the one property only the Sync recorder can have ----------------
@@ -226,7 +240,9 @@ fn a_poisoned_lock_does_not_take_the_next_caller_down() {
     let died = std::thread::spawn(move || {
         r2.event(Event::Enter {
             site: SITE,
-            op: OpId(1),
+            op: instrument::Label::new(instrument::Kind::Span, 1)
+                .unwrap()
+                .op(),
         });
         panic!("this thread fails while the recorder is in use");
     })
@@ -236,7 +252,9 @@ fn a_poisoned_lock_does_not_take_the_next_caller_down() {
     // The recorder still works, and still has what it recorded.
     rec.event(Event::Exit {
         site: SITE,
-        op: OpId(1),
+        op: instrument::Label::new(instrument::Kind::Span, 1)
+            .unwrap()
+            .op(),
         outcome: Outcome::Blocked,
     });
     let r = rec.recording();

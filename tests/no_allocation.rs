@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use instrument::{
     vocab::{Key, Outcome, Site},
-    Entry, Event, OpId, Probe, Recorder,
+    Entry, Event, Probe, Recorder,
 };
 
 /// Counts allocations while armed. Armed only around the region under test, so
@@ -76,11 +76,15 @@ fn recording_allocates_nothing_after_construction() {
         });
         rec.event(Event::Enter {
             site: SITE,
-            op: OpId(i as u32),
+            op: instrument::Label::new(instrument::Kind::Span, i as u32)
+                .unwrap()
+                .op(),
         });
         rec.event(Event::Exit {
             site: SITE,
-            op: OpId(i as u32),
+            op: instrument::Label::new(instrument::Kind::Span, i as u32)
+                .unwrap()
+                .op(),
             outcome: Outcome::Ok,
         });
     }

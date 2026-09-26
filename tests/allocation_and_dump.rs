@@ -4,7 +4,7 @@ use instrument::{
     dump::DumpOnPanic,
     label::{Kind, Labels},
     vocab::{Dir, Site},
-    Event, OpId, Probe, Recorder,
+    Event, Probe, Recorder,
 };
 
 const SITE: Site = Site::of("test::alloc");
@@ -37,7 +37,9 @@ fn a_failure_dump_shows_a_wedge_for_what_it_is() {
     // A wedge: many requests, one answer, a span that never ends.
     rec.event(Event::Enter {
         site: SITE,
-        op: OpId(1),
+        op: instrument::Label::new(instrument::Kind::Span, 1)
+            .unwrap()
+            .op(),
     });
     for i in 0..12 {
         let l = labels.label(Kind::Request, &i);
@@ -57,7 +59,8 @@ fn a_failure_dump_shows_a_wedge_for_what_it_is() {
     let text = DumpOnPanic::new(&rec, "a wedge").last(6).render();
     assert!(text.contains("OUTSTANDING 11"), "{text}");
     assert!(text.contains("unfinished spans 1"), "{text}");
-    assert!(text.contains("test::alloc#1"), "{text}");
+    // A span is named by its label (instrument v2): `span#1`, never a raw id a request could share.
+    assert!(text.contains("test::alloc span#1"), "{text}");
     assert!(text.contains("req#1"), "{text}");
     // A human reading this can tell a wedge from work, which is the one
     // requirement the vocabulary was designed against.

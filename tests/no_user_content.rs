@@ -9,7 +9,7 @@ use instrument::{
     dump::render,
     label::{Kind, Labels},
     vocab::{Bucket, Dir, Key, Outcome, Site, SizeClass},
-    Entry, Event, OpId, Probe, Recorder,
+    Entry, Event, Probe, Recorder,
 };
 
 const SITE: Site = Site::of("test::store");
@@ -29,7 +29,9 @@ fn hex(b: &[u8]) -> String {
 /// be: a span, an edge per lookup, counters for reads, misses and SIZE CLASS.
 fn record_a_session(rec: &Recorder) {
     let mut labels: Labels<[u8; 32]> = Labels::new();
-    let op = OpId(1);
+    let op = instrument::Label::new(instrument::Kind::Span, 1)
+        .unwrap()
+        .op();
     rec.event(Event::Enter { site: SITE, op });
     for i in 0..3u32 {
         let mut id = SECRET_ID;
@@ -168,7 +170,7 @@ fn a_label_never_carries_the_id_and_saturates_rather_than_growing() {
     }
     assert_eq!(many.len(), Labels::<u32>::CAP as usize);
     let over = many.label(Kind::Request, &999_999);
-    assert_eq!(over.ordinal, Labels::<u32>::CAP);
+    assert_eq!(over.ordinal(), Labels::<u32>::CAP);
 }
 
 /// A real per-call report, recorded and dumped, leaves NO user content.
@@ -194,7 +196,9 @@ fn a_per_call_report_carries_counts_and_nothing_else() {
 
     let rec = Recorder::with_capacity(256);
     let site = Site::of("delegate::call");
-    let op = instrument::OpId(7);
+    let op = instrument::Label::new(instrument::Kind::Span, 7)
+        .unwrap()
+        .op();
     // Exactly what Reply::Call carries: six counts the engine already had.
     for (key, value) in [
         (Key::Effects, 3u64),
@@ -336,45 +340,107 @@ fn coarsening_is_its_bands() {
     }
 }
 
-/// Every label KIND has its own prefix, pinned: a dump names `req#3` and `fetch#3` apart, and a page's sends and
-/// the SDK loader's fetch rounds (`Kind::Fetch`, craftworks-sdk) are two sequences that must never collide in one
-/// recording. A label carries only a kind and an ordinal -- nothing of the id it stands for.
+/// Every label KIND has its own prefix and its own CODE, pinned: a dump names `req#3`, `fetch#3` and `span#3`
+/// apart, and the code is what an operation id carries (`Label::op`). A label carries only a kind and an ordinal --
+/// nothing of the id it stands for.
 #[test]
-fn every_label_kind_has_its_own_prefix() {
+fn every_label_kind_has_its_own_prefix_and_code() {
     use instrument::{Kind, Label};
-    let kinds = [
-        Kind::Block,
-        Kind::Peer,
-        Kind::Contract,
-        Kind::Request,
-        Kind::Fetch,
-    ];
-    let prefixes: Vec<&str> = kinds.iter().map(|k| k.prefix()).collect();
-    assert_eq!(prefixes, ["block", "peer", "contract", "req", "fetch"]);
-    let distinct: std::collections::BTreeSet<&str> = prefixes.iter().copied().collect();
+    let prefixes: Vec<&str> = Kind::ALL.iter().map(|k| k.prefix()).collect();
     assert_eq!(
-        distinct.len(),
-        kinds.len(),
-        "two kinds share a prefix: {prefixes:?}"
+        prefixes,
+        ["req", "block", "peer", "contract", "fetch", "span"]
     );
-    assert_ne!(
-        Label {
-            kind: Kind::Request,
-            ordinal: 3
-        },
-        Label {
-            kind: Kind::Fetch,
-            ordinal: 3
-        },
-        "a fetch round and a page send with one ordinal are the same label"
-    );
+    let codes: Vec<u32> = Kind::ALL.iter().map(|k| k.code()).collect();
     assert_eq!(
-        Label {
-            kind: Kind::Fetch,
-            ordinal: 3
+        codes,
+        [0, 1, 2, 3, 4, 5],
+        "a kind's code moved: an already written recording would mean something else"
+    );
+    for k in Kind::ALL {
+        assert_eq!(Kind::of_code(k.code()), Some(k));
+    }
+    assert_eq!(Label::new(Kind::Fetch, 3).unwrap().to_string(), "fetch#3");
+}
+
+/// AN OPERATION ID CARRIES ITS KIND (the architect's conditions on the op() fix): the same ordinal under two kinds
+/// is two operations; every label's op decodes back to it; `OpId::NONE` is in no kind's range; and an ordinal that
+/// would spill into the kind bits cannot be made (refused at `Label::new`, never wrapped into another kind).
+/// Mutants "op() ignores the kind" and "new() does not check" -> red.
+#[test]
+fn an_operation_id_carries_its_kind_and_no_ordinal_spills_into_it() {
+    use instrument::label::MAX_ORDINAL;
+    use instrument::{Kind, Label, OpId};
+    for ordinal in [0, 1, 7, MAX_ORDINAL] {
+        let ops: Vec<OpId> = Kind::ALL
+            .iter()
+            .map(|k| Label::new(*k, ordinal).unwrap().op())
+            .collect();
+        let distinct: std::collections::BTreeSet<OpId> = ops.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            Kind::ALL.len(),
+            "two kinds share an operation at ordinal {ordinal}: {ops:?}"
+        );
+        for k in Kind::ALL {
+            let l = Label::new(k, ordinal).unwrap();
+            assert_eq!(Label::of_op(l.op()), Some(l), "{l} does not decode back");
+            assert_ne!(l.op(), OpId::NONE, "{l}'s operation is the NONE sentinel");
         }
-        .to_string(),
-        "fetch#3"
+    }
+    assert_eq!(Label::of_op(OpId::NONE), None, "NONE decodes to a label");
+    assert!(
+        Label::new(Kind::Request, MAX_ORDINAL).is_some(),
+        "the last ordinal is refused"
+    );
+    assert!(
+        Label::new(Kind::Request, MAX_ORDINAL + 1).is_none(),
+        "an ordinal past the kind bits was made: it would be another kind's operation"
+    );
+    assert_eq!(MAX_ORDINAL, (1 << 29) - 1);
+}
+
+/// `answers()` NEVER CROSSES KINDS: a loader fetch round closed Timeout and a page send of the SAME ordinal that was
+/// answered are two operations -- the send is `Once`, not LATE (what the loader handover found in one recording).
+#[test]
+fn answers_never_cross_kinds() {
+    use instrument::vocab::Site;
+    use instrument::{Answered, Dir, Event, Kind, Label, Outcome, Probe, Record, Recorder};
+    let rec = Recorder::with_capacity(16);
+    let (fetch, req) = (
+        Label::new(Kind::Fetch, 1).unwrap(),
+        Label::new(Kind::Request, 1).unwrap(),
+    );
+    let site = Site::of("test::kinds");
+    rec.event(Event::Edge {
+        site,
+        dir: Dir::Request,
+        id: fetch,
+    });
+    rec.event(Event::Exit {
+        site,
+        op: fetch.op(),
+        outcome: Outcome::Timeout,
+    });
+    rec.event(Event::Edge {
+        site,
+        dir: Dir::Request,
+        id: req,
+    });
+    rec.event(Event::Edge {
+        site,
+        dir: Dir::Response,
+        id: req,
+    });
+    let answers = rec.recording().answers();
+    assert_eq!(
+        answers.iter().find(|(l, _)| *l == req).map(|(_, a)| *a),
+        Some(Answered::Once),
+        "req#1 was judged by fetch#1's close: {answers:?}"
+    );
+    assert_eq!(
+        answers.iter().find(|(l, _)| *l == fetch).map(|(_, a)| *a),
+        Some(Answered::Never)
     );
 }
 
