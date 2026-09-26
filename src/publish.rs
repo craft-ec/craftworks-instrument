@@ -17,7 +17,7 @@
 //! - the encoded record is at most [`MAX_RECORD_BYTES`]: past it, events are dropped (last first), domain counts kept,
 //!   and the loss is counted in `dropped`.
 
-use crate::label::{Kind, Label};
+use crate::label::{Kind, Label, DOMAIN_UNLISTED};
 use crate::recorder::Record;
 use crate::vocab::{
     publish as publishability, Bucket, Grain, Key, Outcome, Publish, Site, SizeClass, StatusClass,
@@ -37,7 +37,13 @@ pub const RECORD_VERSION: u8 = 1;
 pub struct Window {
     pub minute: u64,
     pub start_ms: u64,
+    /// The ring's drop count ([`Record::dropped`], a running total since load) when this window began: a record
+    /// publishes the drops of ITS window only.
+    pub dropped_at_start: u64,
 }
+
+/// A window's length: one minute.
+pub const WINDOW_MS: u64 = 60_000;
 
 /// The build header a page's first window carries -- see [`HEADER_LEAK`](crate::vocab::HEADER_LEAK).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -64,6 +70,9 @@ pub enum PubEvent {
         op: PubOp,
         outcome: Outcome,
     },
+    /// An operation still UNANSWERED at the window's end: a stall, which support needs -- see
+    /// [`UNANSWERED_LEAK`](crate::vocab::UNANSWERED_LEAK).
+    Unanswered { site: Site, op: PubOp },
     /// A published key's value, already at its grain: a bucket's or a class's code, whole seconds, or an enum code.
     Counter {
         site: Site,
@@ -98,6 +107,37 @@ pub struct Published {
 
 /// Apply the filter to one window's recording.
 pub fn publish(rec: &impl Record, window: Window, header: Option<Header>) -> Published {
+    let all = rec.events();
+    // Which OPERATIONS may leave (the architect on instrument#18): one that ENDED non-Ok in this window, or is still
+    // unanswered at its end. An Ok operation's events stay local: their count and offsets would be the page's exact
+    // activity, which the domain buckets exist to coarsen. The LAST exit of an operation in the window decides.
+    let mut ops_seen: Vec<(OpId, Site, Option<Outcome>)> = Vec::new();
+    let mut note = |op: OpId, site: Site, exit: Option<Outcome>| {
+        if op == OpId::NONE || Label::of_op(op).is_none_or(|l| l.kind() == Kind::Domain) {
+            return;
+        }
+        match ops_seen.iter_mut().find(|(o, _, _)| *o == op) {
+            Some(seen) => {
+                if exit.is_some() {
+                    seen.2 = exit;
+                }
+            }
+            None => ops_seen.push((op, site, exit)),
+        }
+    };
+    for e in &all {
+        match *e {
+            Event::Enter { site, op } => note(op, site, None),
+            Event::Exit { site, op, outcome } => note(op, site, Some(outcome)),
+            Event::Counter { site, op, .. } => note(op, site, None),
+            Event::Edge { .. } => {}
+        }
+    }
+    let leaves = |op: OpId| {
+        ops_seen
+            .iter()
+            .any(|(o, _, exit)| *o == op && !matches!(exit, Some(Outcome::Ok)))
+    };
     let mut ops: Vec<OpId> = Vec::new();
     let mut local = |op: OpId| -> Option<PubOp> {
         let label = Label::of_op(op)?;
@@ -116,11 +156,13 @@ pub fn publish(rec: &impl Record, window: Window, header: Option<Header>) -> Pub
     // Per domain: (reads, writes, fails, bytes read, bytes written), summed exactly here and coarsened on the way out.
     let mut domains: Vec<(u32, [u64; 5])> = Vec::new();
     let mut events = Vec::new();
-    for e in rec.events() {
+    for e in all {
         match e {
             Event::Exit { site, op, outcome } => {
-                if let Some(op) = local(op) {
-                    events.push(PubEvent::Exit { site, op, outcome });
+                if outcome != Outcome::Ok && leaves(op) {
+                    if let Some(op) = local(op) {
+                        events.push(PubEvent::Exit { site, op, outcome });
+                    }
                 }
             }
             Event::Counter { site, op, entry } => {
@@ -128,18 +170,24 @@ pub fn publish(rec: &impl Record, window: Window, header: Option<Header>) -> Pub
                     continue;
                 };
                 if let Some(slot) = domain_slot(entry.key) {
-                    // A domain count belongs to its domain's label, and to nothing else.
+                    // A domain count belongs to its domain's label, and to nothing else. An ordinal past the schema
+                    // bound FOLDS into `unlisted`: never truncated into another domain on the way out.
                     let Some(label) = Label::of_op(op).filter(|l| l.kind() == Kind::Domain) else {
                         continue;
                     };
-                    let at = match domains.iter().position(|(d, _)| *d == label.ordinal()) {
+                    let d = label.ordinal().min(DOMAIN_UNLISTED);
+                    let at = match domains.iter().position(|(x, _)| *x == d) {
                         Some(at) => at,
                         None => {
-                            domains.push((label.ordinal(), [0; 5]));
+                            domains.push((d, [0; 5]));
                             domains.len() - 1
                         }
                     };
                     domains[at].1[slot] = domains[at].1[slot].saturating_add(entry.value);
+                    continue;
+                }
+                // Only an operation that leaves carries its counters out; a connection-wide counter stays local.
+                if op == OpId::NONE || !leaves(op) {
                     continue;
                 }
                 let value = match grain {
@@ -147,24 +195,39 @@ pub fn publish(rec: &impl Record, window: Window, header: Option<Header>) -> Pub
                     Grain::SizeClass => {
                         SizeClass::of(usize::try_from(entry.value).unwrap_or(usize::MAX)) as u64
                     }
+                    // Only an offset INSIDE the window's minute: seconds 0..59, never below the minute by construction.
                     Grain::Seconds => {
-                        entry.value.saturating_sub(window.start_ms) / PUBLISHED_OFFSET_GRAIN_MS
+                        if entry.value < window.start_ms
+                            || entry.value - window.start_ms >= WINDOW_MS
+                        {
+                            continue;
+                        }
+                        (entry.value - window.start_ms) / PUBLISHED_OFFSET_GRAIN_MS
                     }
                     Grain::Enum => match enum_code(entry.key, entry.value) {
                         Some(v) => v,
                         None => continue,
                     },
                 };
-                let op = if op == OpId::NONE { None } else { local(op) };
-                events.push(PubEvent::Counter {
-                    site,
-                    op,
-                    key: entry.key,
-                    value,
-                });
+                if let Some(op) = local(op) {
+                    events.push(PubEvent::Counter {
+                        site,
+                        op: Some(op),
+                        key: entry.key,
+                        value,
+                    });
+                }
             }
             // Local in this first cut: an Enter adds nothing an Exit doesn't; an Edge names a foreign thing.
             Event::Enter { .. } | Event::Edge { .. } => {}
+        }
+    }
+    // A STALL: every operation still unanswered at the window's end is said, once, where it first appeared.
+    for (op, site, exit) in &ops_seen {
+        if exit.is_none() {
+            if let Some(op) = local(*op) {
+                events.push(PubEvent::Unanswered { site: *site, op });
+            }
         }
     }
     domains.sort_by_key(|(d, _)| *d);
@@ -179,20 +242,20 @@ pub fn publish(rec: &impl Record, window: Window, header: Option<Header>) -> Pub
             bytes_written: SizeClass::of(usize::try_from(c[4]).unwrap_or(usize::MAX)),
         })
         .collect();
+    // THIS window's drops only: the ring's count is its running total since load.
+    let lost = rec.dropped().saturating_sub(window.dropped_at_start);
     let mut out = Published {
         minute: window.minute,
         header,
         events,
         domains,
-        dropped: Bucket::Zero,
+        dropped: Bucket::of(lost),
     };
-    let ring_dropped = rec.dropped();
     let mut cut = 0u64;
-    out.dropped = Bucket::of(ring_dropped);
     // The bound: events go first, last first; the domain counts stay.
     while out.encode().len() > MAX_RECORD_BYTES && out.events.pop().is_some() {
         cut += 1;
-        out.dropped = Bucket::of(ring_dropped.saturating_add(cut));
+        out.dropped = Bucket::of(lost.saturating_add(cut));
     }
     out
 }
@@ -334,6 +397,11 @@ impl Published {
                     b.push(t);
                     b.extend_from_slice(&c.to_be_bytes());
                 }
+                PubEvent::Unanswered { site, op: o } => {
+                    b.push(2);
+                    site_bytes(&mut b, site);
+                    op(&mut b, Some(o));
+                }
                 PubEvent::Counter {
                     site,
                     op: o,
@@ -414,6 +482,7 @@ impl Published {
                     key: key_of(r.u8()?)?,
                     value: r.u64()?,
                 },
+                2 => PubEvent::Unanswered { site, op: op? },
                 _ => return None,
             });
         }

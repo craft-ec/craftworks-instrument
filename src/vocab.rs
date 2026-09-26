@@ -429,8 +429,12 @@ pub enum Publish {
 /// the app's version), carried by a page's first window.
 pub const HEADER_LEAK: &str = "which SDK build and app version the person ran";
 
-/// The leak line of an operation's ending ([`Outcome`]), the one event kind besides counters that is published.
+/// The leak line of an operation's ending ([`Outcome`]): only a NON-Ok ending is published (an Ok operation's events
+/// stay local -- their count would be the page's exact activity).
 pub const OUTCOME_LEAK: &str = "that a failure of that class happened in that minute";
+
+/// The leak line of an operation still UNANSWERED at a window's end (a stall), published with its own counters.
+pub const UNANSWERED_LEAK: &str = "that an operation was still unanswered at the minute's end";
 
 /// Sort a key into [`Publish`]: LOCAL unless listed. Exhaustive on purpose -- no wildcard arm -- so a new key is a
 /// compile error until someone decides whether it may leave, the way [`class`] makes them decide what it is.
