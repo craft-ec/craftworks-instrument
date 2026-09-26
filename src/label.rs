@@ -31,17 +31,27 @@ pub enum Kind {
     /// A SPAN (`Enter`/`Exit`) a recorder's user numbers itself: its own
     /// sequence, so a span never shares an operation id with a request.
     Span,
+    /// A DATA DOMAIN a page touched (craftworks-docs OBSERVABILITY §1): its ordinal is the domain's INDEX in the
+    /// touching app's own published schema (`0..DOMAIN_SCHEMA_MAX`), or [`DOMAIN_UNLISTED`] for a touch the schema
+    /// doesn't list -- never the domain's name, a row key or a value. Made by [`Label::domain`], which refuses the rest.
+    Domain,
 }
+
+/// How many domains an app's schema may index for the recording (OBSERVABILITY §2.2): ordinals `0..DOMAIN_SCHEMA_MAX`.
+pub const DOMAIN_SCHEMA_MAX: u32 = 64;
+/// The one bucket for a touch the app's schema doesn't list.
+pub const DOMAIN_UNLISTED: u32 = DOMAIN_SCHEMA_MAX;
 
 impl Kind {
     /// Every kind, for a test or a reader to visit.
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Request,
         Kind::Block,
         Kind::Peer,
         Kind::Contract,
         Kind::Fetch,
         Kind::Span,
+        Kind::Domain,
     ];
 
     /// A small stable integer, carried in the top bits of the operation a label
@@ -55,6 +65,7 @@ impl Kind {
             Kind::Contract => 3,
             Kind::Fetch => 4,
             Kind::Span => 5,
+            Kind::Domain => 6,
         }
     }
 
@@ -67,6 +78,7 @@ impl Kind {
             3 => Some(Kind::Contract),
             4 => Some(Kind::Fetch),
             5 => Some(Kind::Span),
+            6 => Some(Kind::Domain),
             _ => None,
         }
     }
@@ -79,6 +91,7 @@ impl Kind {
             Kind::Request => "req",
             Kind::Fetch => "fetch",
             Kind::Span => "span",
+            Kind::Domain => "domain",
         }
     }
 }
@@ -103,6 +116,19 @@ impl Label {
             None
         } else {
             Some(Label { kind, ordinal })
+        }
+    }
+
+    /// A data domain's label: its schema `index` (`< DOMAIN_SCHEMA_MAX`), or [`DOMAIN_UNLISTED`]. `None` past it:
+    /// a domain ordinal is bounded, so a schema can't make one a counter of anything.
+    pub const fn domain(index: u32) -> Option<Label> {
+        if index > DOMAIN_UNLISTED {
+            None
+        } else {
+            Some(Label {
+                kind: Kind::Domain,
+                ordinal: index,
+            })
         }
     }
 

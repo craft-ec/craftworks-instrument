@@ -349,18 +349,42 @@ fn every_label_kind_has_its_own_prefix_and_code() {
     let prefixes: Vec<&str> = Kind::ALL.iter().map(|k| k.prefix()).collect();
     assert_eq!(
         prefixes,
-        ["req", "block", "peer", "contract", "fetch", "span"]
+        ["req", "block", "peer", "contract", "fetch", "span", "domain"]
     );
     let codes: Vec<u32> = Kind::ALL.iter().map(|k| k.code()).collect();
     assert_eq!(
         codes,
-        [0, 1, 2, 3, 4, 5],
+        [0, 1, 2, 3, 4, 5, 6],
         "a kind's code moved: an already written recording would mean something else"
     );
     for k in Kind::ALL {
         assert_eq!(Kind::of_code(k.code()), Some(k));
     }
     assert_eq!(Label::new(Kind::Fetch, 3).unwrap().to_string(), "fetch#3");
+}
+
+/// A DATA DOMAIN's label is BOUNDED (craftworks-sdk#399, OBSERVABILITY §2.2): a schema index `0..64`, or the one
+/// `unlisted` bucket at 64 -- never a larger ordinal, so a domain label can never become a counter of anything.
+#[test]
+fn a_domain_label_is_a_bounded_schema_index() {
+    use instrument::label::{DOMAIN_SCHEMA_MAX, DOMAIN_UNLISTED};
+    use instrument::{Kind, Label};
+    assert_eq!(DOMAIN_UNLISTED, DOMAIN_SCHEMA_MAX);
+    for i in 0..=DOMAIN_UNLISTED {
+        let l = Label::domain(i).expect("a schema index or unlisted");
+        assert_eq!((l.kind(), l.ordinal()), (Kind::Domain, i));
+        assert_eq!(
+            Label::of_op(l.op()),
+            Some(l),
+            "a domain label's op does not decode back to it"
+        );
+    }
+    assert_eq!(
+        Label::domain(DOMAIN_UNLISTED + 1),
+        None,
+        "a domain ordinal past unlisted was made"
+    );
+    assert_eq!(Label::domain(u32::MAX), None);
 }
 
 /// AN OPERATION ID CARRIES ITS KIND (the architect's conditions on the op() fix): the same ordinal under two kinds

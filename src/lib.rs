@@ -51,6 +51,7 @@
 pub mod dump;
 pub mod gap;
 pub mod label;
+pub mod publish;
 pub mod recorder;
 pub mod vocab;
 
