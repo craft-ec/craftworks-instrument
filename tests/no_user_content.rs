@@ -269,7 +269,14 @@ fn drop_reason_codes_are_pinned_and_distinct() {
 
     // And no two share a number — the failure that pinning alone would not
     // catch if a SIXTH reason were added reusing one.
-    let all = [Unparseable, TrailingBytes, TooLarge, Unexpected, NotForUs, ShortAnswer];
+    let all = [
+        Unparseable,
+        TrailingBytes,
+        TooLarge,
+        Unexpected,
+        NotForUs,
+        ShortAnswer,
+    ];
     let codes: std::collections::BTreeSet<u64> = all.iter().map(|r| r.code()).collect();
     assert_eq!(
         codes.len(),
