@@ -40,6 +40,11 @@ pub struct Window {
     /// The ring's drop count ([`Record::dropped`], a running total since load) when this window began: a record
     /// publishes the drops of ITS window only.
     pub dropped_at_start: u64,
+    /// Publishable events lost OUTSIDE the ring before this window: a whole earlier record the page could not keep
+    /// (its bounded pending list overflowed, sdk#399 step 4) -- that record's events plus its own drop count. ADDED to
+    /// this window's loss, never folded into `dropped_at_start` (whose one meaning is the ring's total at the start;
+    /// adding to it would LOWER the published count).
+    pub lost_before: u64,
 }
 
 /// A window's length: one minute.
@@ -242,8 +247,12 @@ pub fn publish(rec: &impl Record, window: Window, header: Option<Header>) -> Pub
             bytes_written: SizeClass::of(usize::try_from(c[4]).unwrap_or(usize::MAX)),
         })
         .collect();
-    // THIS window's drops only: the ring's count is its running total since load.
-    let lost = rec.dropped().saturating_sub(window.dropped_at_start);
+    // THIS window's drops (the ring's count is its running total since load), plus what was lost outside the ring
+    // before it (a record the page could not keep).
+    let lost = rec
+        .dropped()
+        .saturating_sub(window.dropped_at_start)
+        .saturating_add(window.lost_before);
     let mut out = Published {
         minute: window.minute,
         header,

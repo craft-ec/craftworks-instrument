@@ -82,6 +82,7 @@ fn window(rng: &mut Rng, ring_dropped: u64) -> Window {
         minute: 29_000_000 + rng.below(1_000),
         start_ms: 3_600_000 + rng.below(10_000_000),
         dropped_at_start: ring_dropped - rng.below(ring_dropped.min(60) + 1),
+        lost_before: if rng.below(3) == 0 { rng.below(500) } else { 0 },
     }
 }
 
@@ -430,8 +431,8 @@ fn p5_bounded_and_the_loss_counted() {
         );
         assert_eq!(
             p.dropped,
-            Bucket::of(r.dropped - w.dropped_at_start + cut),
-            "dropped is not this window's drops plus the events cut"
+            Bucket::of(r.dropped - w.dropped_at_start + w.lost_before + cut),
+            "dropped is not this window's drops plus what was lost before it plus the events cut"
         );
     }
     assert!(
@@ -483,10 +484,26 @@ fn p8_dropped_is_this_windows_not_the_rings_total() {
         minute: 1,
         start_ms: 0,
         dropped_at_start: 5_000,
+        lost_before: 0,
     };
     assert_eq!(
         publish(&ring, w, None).dropped,
         Bucket::Zero,
         "the ring's total since load was published as this window's loss"
+    );
+    // A record lost OUTSIDE the ring (the page's pending list overflowed) RAISES the next record's count: never lowers.
+    let after_loss = Window {
+        lost_before: 40,
+        ..w
+    };
+    let p = publish(&ring, after_loss, None);
+    assert_eq!(
+        p.dropped,
+        Bucket::of(40),
+        "a lost record's events did not reach the next record's drop count"
+    );
+    assert!(
+        p.dropped >= publish(&ring, w, None).dropped,
+        "losing a record lowered the published drop count"
     );
 }
