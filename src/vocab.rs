@@ -239,6 +239,21 @@ pub enum Key {
     /// the URL -- a URL names the file, and the file is the app's.
     StatusClass,
 
+    /// Records of one DATA DOMAIN (a `d/<domain>/…` collection, ARCHITECTURE §5) the page READ for a client request,
+    /// counted where the request names its keys (craftworks-sdk `page::server`), never in the engine. The operation it
+    /// belongs to is the domain's [`Label`](crate::Label) of kind [`Domain`](crate::Kind::Domain): the domain's ORDINAL
+    /// in the touching app's own published schema, never its name (OBSERVABILITY §1). Published ALWAYS bucketed
+    /// ([`Bucket`]): it counts the person's activity.
+    RecordReads,
+    /// Records of one data domain the page WROTE — see [`RecordReads`](Key::RecordReads).
+    RecordWrites,
+    /// Reads or writes of one data domain that FAILED — see [`RecordReads`](Key::RecordReads).
+    RecordFails,
+    /// Bytes of records of one data domain read — published ALWAYS as a padded [`SizeClass`], never exact.
+    RecordBytesRead,
+    /// Bytes of records of one data domain written — see [`RecordBytesRead`](Key::RecordBytesRead).
+    RecordBytesWritten,
+
     /// NOT A REAL KEY. A negative control, and it cannot ship: `cfg(test)`.
     ///
     /// Every real key in this crate is [`Class::Diagnostic`], which leaves the
@@ -297,6 +312,11 @@ pub const ALL: &[Key] = &[
     Key::ArmedAtMs,
     Key::ReArmedAtMs,
     Key::StatusClass,
+    Key::RecordReads,
+    Key::RecordWrites,
+    Key::RecordFails,
+    Key::RecordBytesRead,
+    Key::RecordBytesWritten,
 ];
 
 /// Which of the three audit classes a [`Key`] falls in.
@@ -365,6 +385,107 @@ pub const fn class(k: Key) -> Class {
         Key::ReArmedAtMs => Class::Diagnostic,
         // How one fetch round ended: one loader, one execution.
         Key::StatusClass => Class::Diagnostic,
+        // What one page did to one data domain in one window: diagnostics for support, never a meter (§14: bytes
+        // moved gate a tier only through counterparty receipts).
+        Key::RecordReads => Class::Diagnostic,
+        Key::RecordWrites => Class::Diagnostic,
+        Key::RecordFails => Class::Diagnostic,
+        Key::RecordBytesRead => Class::Diagnostic,
+        Key::RecordBytesWritten => Class::Diagnostic,
+    }
+}
+
+/// The grain a PUBLISHED key leaves the device at (craftworks-docs OBSERVABILITY §2.3): never the ring's own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Grain {
+    /// A [`Bucket`]: a count of the person's activity is never exact once it leaves.
+    Bucket,
+    /// A padded [`SizeClass`] (powers of two): a volume is never exact once it leaves.
+    SizeClass,
+    /// Whole seconds from the WINDOW's start ([`PUBLISHED_OFFSET_GRAIN_MS`]), never the recording's: windows can't be
+    /// aligned below their key's minute.
+    Seconds,
+    /// A value of a closed vocabulary enum (its code), which carries nothing a person wrote.
+    Enum,
+}
+
+/// The coarsest-allowed offset grain once published: one second.
+pub const PUBLISHED_OFFSET_GRAIN_MS: u64 = 1_000;
+
+/// May a key LEAVE the device, through the one publish filter ([`publish`](crate::publish::publish))?
+///
+/// THE LEAK TABLE, in code (OBSERVABILITY §2.2): each published key states, in the same line that publishes it, what
+/// it tells anyone who reads the person's (public, for now) observation tree. Every change to this table, to a grain,
+/// or to the filter is reviewed as PRIVACY-CRITICAL, with its leak line in the PR body.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Publish {
+    /// Never leaves the ring. The default.
+    Local,
+    /// Leaves, at `grain`, and says `leak`.
+    Published { grain: Grain, leak: &'static str },
+}
+
+/// The leak line of the one field of a record that is not a key: the build header (the SDK wasm sha the page RAN,
+/// the app's version), carried by a page's first window.
+pub const HEADER_LEAK: &str = "which SDK build and app version the person ran";
+
+/// The leak line of an operation's ending ([`Outcome`]): only a NON-Ok ending is published (an Ok operation's events
+/// stay local -- their count would be the page's exact activity).
+pub const OUTCOME_LEAK: &str = "that a failure of that class happened in that minute";
+
+/// The leak line of an operation still UNANSWERED at a window's end (a stall), published with its own counters.
+pub const UNANSWERED_LEAK: &str = "that an operation was still unanswered at the minute's end";
+
+/// Sort a key into [`Publish`]: LOCAL unless listed. Exhaustive on purpose -- no wildcard arm -- so a new key is a
+/// compile error until someone decides whether it may leave, the way [`class`] makes them decide what it is.
+pub const fn publish(k: Key) -> Publish {
+    const DOMAIN_COUNT: &str = "reveals which of an app's collections a person used, per minute, at bucket grain; the collection's name is public in the app's schema";
+    const DOMAIN_BYTES: &str = "reveals the VOLUME class moved per collection per minute: a large class in a media collection says a file was stored or viewed (§5 leak 2, 'metering precision is leak precision')";
+    match k {
+        #[cfg(test)]
+        Key::SampleQuotaSpent | Key::SampleDepth => Publish::Local,
+        Key::RecordReads | Key::RecordWrites | Key::RecordFails => Publish::Published {
+            grain: Grain::Bucket,
+            leak: DOMAIN_COUNT,
+        },
+        Key::RecordBytesRead | Key::RecordBytesWritten => Publish::Published {
+            grain: Grain::SizeClass,
+            leak: DOMAIN_BYTES,
+        },
+        Key::Attempts => Publish::Published {
+            grain: Grain::Bucket,
+            leak: "how many times an operation was tried in that minute, at bucket grain",
+        },
+        Key::StatusClass => Publish::Published {
+            grain: Grain::Enum,
+            leak: OUTCOME_LEAK,
+        },
+        Key::OffsetMs => Publish::Published {
+            grain: Grain::Seconds,
+            leak: "when within the minute an operation ran, to the second",
+        },
+        Key::Reads
+        | Key::Misses
+        | Key::BytesClass
+        | Key::Sent
+        | Key::Received
+        | Key::CountBucket
+        | Key::Owed
+        | Key::Effects
+        | Key::Ops
+        | Key::Awaiting
+        | Key::ReadBack
+        | Key::Stranded
+        | Key::DroppedMsgs
+        | Key::BytesOut
+        | Key::BytesIn
+        | Key::Ambiguous
+        | Key::IdWidthGiven
+        | Key::IdWidthWanted
+        | Key::RtoMs
+        | Key::SampleMs
+        | Key::ArmedAtMs
+        | Key::ReArmedAtMs => Publish::Local,
     }
 }
 
@@ -623,6 +744,11 @@ mod audit {
         (Key::ArmedAtMs, Class::Diagnostic),
         (Key::ReArmedAtMs, Class::Diagnostic),
         (Key::StatusClass, Class::Diagnostic),
+        (Key::RecordReads, Class::Diagnostic),
+        (Key::RecordWrites, Class::Diagnostic),
+        (Key::RecordFails, Class::Diagnostic),
+        (Key::RecordBytesRead, Class::Diagnostic),
+        (Key::RecordBytesWritten, Class::Diagnostic),
     ];
 
     /// THE CONTROL: the classifier can tell the three classes apart.
