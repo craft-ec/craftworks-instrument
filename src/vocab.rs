@@ -511,6 +511,13 @@ pub enum DropReason {
     /// It parsed, and answered fewer items than were asked: the rest of the
     /// request is unanswered (a batched query's reply short of its request).
     ShortAnswer,
+    /// A SECOND answer for a GET the sender re-asked once the node's own GET was over (craftworks-sdk#447: the node
+    /// does not dedupe client GETs, so a re-ask past the node's bound B may overlap a stalled earlier GET, and both can
+    /// answer). The first answer ends the GET; this is the second, which arrives when nothing waits on the key and is
+    /// dropped. A GET's answer names only its key, so it is counted as the answer that exists only if BOTH node GETs
+    /// lived -- the observable for the known overlap (a header-then-stall GET runs to ~2 × B). Distinct from
+    /// [`Unexpected`](DropReason::Unexpected): a count of these moves B.
+    AnsweredAfterReask,
 }
 
 impl DropReason {
@@ -524,6 +531,7 @@ impl DropReason {
             DropReason::Unexpected => 3,
             DropReason::NotForUs => 4,
             DropReason::ShortAnswer => 5,
+            DropReason::AnsweredAfterReask => 6,
         }
     }
 }
