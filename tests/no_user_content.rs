@@ -266,6 +266,7 @@ fn drop_reason_codes_are_pinned_and_distinct() {
     assert_eq!(Unexpected.code(), 3);
     assert_eq!(NotForUs.code(), 4);
     assert_eq!(ShortAnswer.code(), 5);
+    assert_eq!(AnsweredAfterReask.code(), 6);
 
     // And no two share a number — the failure that pinning alone would not
     // catch if a SIXTH reason were added reusing one.
@@ -276,6 +277,7 @@ fn drop_reason_codes_are_pinned_and_distinct() {
         Unexpected,
         NotForUs,
         ShortAnswer,
+        AnsweredAfterReask,
     ];
     let codes: std::collections::BTreeSet<u64> = all.iter().map(|r| r.code()).collect();
     assert_eq!(
