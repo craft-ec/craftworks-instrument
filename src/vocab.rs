@@ -508,6 +508,9 @@ pub enum DropReason {
     Unexpected,
     /// A message kind this side has no use for.
     NotForUs,
+    /// It parsed, and answered fewer items than were asked: the rest of the
+    /// request is unanswered (a batched query's reply short of its request).
+    ShortAnswer,
 }
 
 impl DropReason {
@@ -520,6 +523,7 @@ impl DropReason {
             DropReason::TooLarge => 2,
             DropReason::Unexpected => 3,
             DropReason::NotForUs => 4,
+            DropReason::ShortAnswer => 5,
         }
     }
 }
